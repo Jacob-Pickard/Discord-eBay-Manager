@@ -1,0 +1,55 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+ebaymanager-bot
+ebaymanager-bot.exe
+
+# Test binary
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Dependency directories
+vendor/
+
+# Environment variables - NEVER COMMIT THESE
+.env
+.env.local
+.env.production
+.env.*.local
+*.env
+
+# Sensitive configuration files
+config.json
+secrets.json
+credentials.json
+
+# OAuth tokens and API keys
+tokens/
+*.token
+*.key
+*.pem
+
+# Logs with potentially sensitive data
+logs/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Backup files
+*.bak
+*.backup
+*~
