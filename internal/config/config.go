@@ -7,22 +7,22 @@ import (
 
 // Config holds all application configuration
 type Config struct {
-	DiscordToken      string
-	EbayConfig        EbayConfig
-	WebhookPort       string
-	WebhookVerifyToken string
+	DiscordToken          string
+	EbayConfig            EbayConfig
+	WebhookPort           string
+	WebhookVerifyToken    string
 	NotificationChannelID string
 }
 
 // EbayConfig holds eBay API configuration
 type EbayConfig struct {
-	AppID       string
-	CertID      string
-	DevID       string
-	RedirectURI string
-	AccessToken string
+	AppID        string
+	CertID       string
+	DevID        string
+	RedirectURI  string
+	AccessToken  string
 	RefreshToken string
-	Environment string // PRODUCTION or SANDBOX
+	Environment  string // PRODUCTION or SANDBOX
 }
 
 // Load reads configuration from environment variables
@@ -44,7 +44,7 @@ func Load() (*Config, error) {
 
 	webhookPort := os.Getenv("WEBHOOK_PORT")
 	if webhookPort == "" {
-		webhookPort = "8080"
+		webhookPort = "8081"
 	}
 
 	webhookVerifyToken := os.Getenv("WEBHOOK_VERIFY_TOKEN")

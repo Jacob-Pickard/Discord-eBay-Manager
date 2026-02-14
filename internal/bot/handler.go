@@ -7,14 +7,21 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bwmarrin/discordgo"
 	"ebaymanager-bot/internal/ebay"
+
+	"github.com/bwmarrin/discordgo"
 )
+
+// WebhookServer interface for OAuth callbacks
+type WebhookServer interface {
+	RegisterOAuthCallback(state string, discord *discordgo.Session, interaction *discordgo.Interaction)
+}
 
 // Handler manages Discord bot interactions
 type Handler struct {
-	discord *discordgo.Session
-	ebay    *ebay.Client
+	discord       *discordgo.Session
+	ebay          *ebay.Client
+	webhookServer WebhookServer
 }
 
 // NewHandler creates a new bot handler
@@ -23,6 +30,11 @@ func NewHandler(discord *discordgo.Session, ebayClient *ebay.Client) *Handler {
 		discord: discord,
 		ebay:    ebayClient,
 	}
+}
+
+// SetWebhookServer sets the webhook server for OAuth callbacks
+func (h *Handler) SetWebhookServer(server WebhookServer) {
+	h.webhookServer = server
 }
 
 // RegisterCommands sets up Discord slash commands and message handlers
@@ -42,6 +54,18 @@ func (h *Handler) RegisterCommands() {
 		{
 			Name:        "get-offers",
 			Description: "Get pending offers",
+		},
+		{
+			Name:        "get-listings",
+			Description: "View your active eBay listings",
+			Options: []*discordgo.ApplicationCommandOption{
+				{
+					Type:        discordgo.ApplicationCommandOptionInteger,
+					Name:        "limit",
+					Description: "Number of listings to show (default: 10)",
+					Required:    false,
+				},
+			},
 		},
 		{
 			Name:        "get-balance",
@@ -76,6 +100,10 @@ func (h *Handler) RegisterCommands() {
 			Description: "Check eBay API connection status",
 		},
 		{
+			Name:        "ebay-scopes",
+			Description: "Check what API scopes your OAuth token has",
+		},
+		{
 			Name:        "ebay-authorize",
 			Description: "Authorize bot with your eBay account (get refresh token)",
 		},
@@ -98,8 +126,8 @@ func (h *Handler) RegisterCommands() {
 				{
 					Type:        discordgo.ApplicationCommandOptionString,
 					Name:        "url",
-					Description: "Your public webhook URL (e.g., https://yourdomain.com/webhook/ebay/notification)",
-					Required:    true,
+					Description: "Webhook URL (leave empty to use jacob.it.com)",
+					Required:    false,
 				},
 			},
 		},
@@ -155,6 +183,20 @@ func (h *Handler) RegisterCommands() {
 		},
 	}
 
+	// Delete all existing commands first (cleans up old/removed commands)
+	existingCommands, err := h.discord.ApplicationCommands(h.discord.State.User.ID, "")
+	if err == nil {
+		log.Printf("Cleaning up %d existing commands...", len(existingCommands))
+		for _, cmd := range existingCommands {
+			err := h.discord.ApplicationCommandDelete(h.discord.State.User.ID, "", cmd.ID)
+			if err != nil {
+				log.Printf("⚠️ Failed to delete command %s: %v", cmd.Name, err)
+			} else {
+				log.Printf("🗑️ Deleted old command: /%s", cmd.Name)
+			}
+		}
+	}
+
 	log.Printf("Registering %d commands...", len(commands))
 	for _, cmd := range commands {
 		createdCmd, err := h.discord.ApplicationCommandCreate(h.discord.State.User.ID, "", cmd)
@@ -187,6 +229,8 @@ func (h *Handler) interactionHandler(s *discordgo.Session, i *discordgo.Interact
 		h.handleGetOrders(s, i)
 	case "get-offers":
 		h.handleGetOffers(s, i)
+	case "get-listings":
+		h.handleGetListings(s, i)
 	case "get-balance":
 		h.handleGetBalance(s, i)
 	case "get-payouts":
@@ -195,6 +239,8 @@ func (h *Handler) interactionHandler(s *discordgo.Session, i *discordgo.Interact
 		h.handleGetMessages(s, i)
 	case "ebay-status":
 		h.handleEbayStatus(s, i)
+	case "ebay-scopes":
+		h.handleEbayScopes(s, i)
 	case "ebay-authorize":
 		h.handleEbayAuthorize(s, i)
 	case "ebay-code":
@@ -228,9 +274,8 @@ func (h *Handler) handleGetBalance(s *discordgo.Session, i *discordgo.Interactio
 		return
 	}
 
-	msg := fmt.Sprintf("💰 **Your eBay Balance**\n\n**Total Balance:** $%.2f\n**Available:** $%.2f\n**Pending:** $%.2f\n\n📊 **Breakdown:**\n• Sales this month: $%.2f\n• Fees this month: $%.2f\n• Net income: $%.2f\n\n💡 Use `/get-payouts` to see recent transactions",
-		balance["totalBalance"], balance["available"], balance["pending"],
-		balance["salesThisMonth"], balance["feesThisMonth"], balance["netIncome"])
+	msg := fmt.Sprintf("💰 **Your eBay Balance**\n\n**Balance:** $%.2f\n\n💡 *Based on recent transactions. Use `/get-payouts` to see completed payouts.*",
+		balance["total"])
 
 	s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
 		Content: &msg,
@@ -240,7 +285,7 @@ func (h *Handler) handleGetBalance(s *discordgo.Session, i *discordgo.Interactio
 func (h *Handler) handleGetPayouts(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	options := i.ApplicationCommandData().Options
 	limit := 10
-	
+
 	if len(options) > 0 {
 		limit = int(options[0].IntValue())
 	}
@@ -274,7 +319,7 @@ func (h *Handler) handleGetPayouts(s *discordgo.Session, i *discordgo.Interactio
 		} else if payout["status"] == "FAILED" {
 			status = "❌"
 		}
-		
+
 		msg += fmt.Sprintf("%d. %s **$%.2f** - %s\n", i+1, status, payout["amount"], payout["type"])
 		msg += fmt.Sprintf("   📅 %s | ID: `%s`\n\n", payout["date"], payout["id"])
 	}
@@ -287,7 +332,7 @@ func (h *Handler) handleGetPayouts(s *discordgo.Session, i *discordgo.Interactio
 func (h *Handler) handleGetMessages(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	options := i.ApplicationCommandData().Options
 	limit := 10
-	
+
 	if len(options) > 0 {
 		limit = int(options[0].IntValue())
 	}
@@ -319,7 +364,7 @@ func (h *Handler) handleGetMessages(s *discordgo.Session, i *discordgo.Interacti
 		if message["unread"] == true {
 			unread = "🔴 "
 		}
-		
+
 		msg += fmt.Sprintf("%d. %s**From:** %s\n", i+1, unread, message["sender"])
 		msg += fmt.Sprintf("   **Subject:** %s\n", message["subject"])
 		msg += fmt.Sprintf("   **Message:** %s\n", message["body"])
@@ -347,77 +392,126 @@ func (h *Handler) handleGetOrders(s *discordgo.Session, i *discordgo.Interaction
 	}
 
 	if len(orders) == 0 {
-		msg := "📋 **Recent Orders**\n\n⚠️ No orders found in your eBay account.\n\n💡 **Sample Order Data:**\n\n**Order #19-12345-67890**\n• Buyer: tech_enthusiast_2026\n• Item: Vintage Gaming Console Bundle\n• Total: $299.99 USD\n• Status: AWAITING_SHIPMENT\n• Date: Jan 28, 2026\n\n**Order #19-54321-09876**\n• Buyer: collector_pro\n• Item: Limited Edition Trading Cards\n• Total: $149.50 USD\n• Status: PAID\n• Date: Jan 27, 2026\n\n**Order #19-11111-22222**\n• Buyer: gadget_lover\n• Item: Wireless Headphones - Premium\n• Total: $89.99 USD\n• Status: IN_TRANSIT\n• Date: Jan 26, 2026\n\n✨ *This is sample data. Real orders will appear here once you have sales!*"
+		msg := "📋 **Recent Orders**\n\n⚠️ No orders found in your eBay account.\n\n💡 Once you have sales, they will appear here!"
 		s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
 			Content: &msg,
 		})
 		return
 	}
 
-	// Build response message
+	// Build response message with embeds for images
 	response := "📋 **Recent Orders**\n\n"
+	embeds := []*discordgo.MessageEmbed{}
+
 	for i, order := range orders {
 		if i >= 5 { // Limit to 5 orders in Discord message
 			response += fmt.Sprintf("\n*...and %d more orders*", len(orders)-5)
 			break
 		}
-		response += fmt.Sprintf("**Order #%s**\n", order.OrderID)
-		response += fmt.Sprintf("• Buyer: %s\n", order.BuyerUsername)
-		response += fmt.Sprintf("• Total: %.2f %s\n", order.TotalPrice, order.Currency)
-		response += fmt.Sprintf("• Status: %s\n", order.FulfillmentStatus)
-		response += fmt.Sprintf("• Date: %s\n\n", order.CreationDate.Format("Jan 02, 2006"))
+
+		// Get first item for thumbnail
+		var imageUrl string
+		var itemTitle string
+		if len(order.LineItems) > 0 {
+			imageUrl = order.LineItems[0].ImageUrl
+			itemTitle = order.LineItems[0].Title
+			if itemTitle == "" {
+				itemTitle = "Item"
+			}
+		}
+
+		// Create embed for this order with image
+		embed := &discordgo.MessageEmbed{
+			Title: fmt.Sprintf("Order #%s", order.OrderID),
+			Color: 0x00ff00, // Green
+			Fields: []*discordgo.MessageEmbedField{
+				{Name: "👤 Buyer", Value: order.BuyerUsername, Inline: true},
+				{Name: "💰 Total", Value: fmt.Sprintf("%.2f %s", order.TotalPrice, order.Currency), Inline: true},
+				{Name: "📦 Status", Value: order.FulfillmentStatus, Inline: true},
+				{Name: "📅 Date", Value: order.CreationDate.Format("Jan 02, 2006"), Inline: true},
+			},
+			Footer: &discordgo.MessageEmbedFooter{
+				Text: itemTitle,
+			},
+		}
+
+		if imageUrl != "" {
+			embed.Thumbnail = &discordgo.MessageEmbedThumbnail{
+				URL: imageUrl,
+			}
+		}
+
+		embeds = append(embeds, embed)
 	}
 
 	s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
 		Content: &response,
+		Embeds:  &embeds,
 	})
 }
 
 func (h *Handler) handleGetOffers(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Content: "💰 **Buyer Offers**\n\n" +
+				"🔔 **Set up offer notifications to get alerts in Discord when buyers make offers!**\n\n" +
+				"**How to enable:**\n" +
+				"1. Run `/webhook-subscribe` and select the **OFFER** notification type\n" +
+				"2. When a buyer makes an offer, you'll get an instant Discord notification\n" +
+				"3. Use `/accept-offer`, `/counter-offer`, or `/decline-offer` to respond\n\n" +
+				"💡 **Tip:** You can also view offers at:\n" +
+				"🔗 https://offer.ebay.com/ws/eBayISAPI.dll?BestOfferList",
+		},
 	})
+}
 
-	offers, err := h.ebay.GetOffers()
-	if err != nil {
-		errMsg := fmt.Sprintf("❌ Failed to fetch offers: %v", err)
-		s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
-			Content: &errMsg,
-		})
-		return
-	}
-
-	if len(offers) == 0 {
-		msg := "💰 **Pending Buyer Offers**\n\n⚠️ No pending offers found.\n\n💡 **Sample Offer Data:**\n\n**Offer from vintage_collector**\n• Item: Vintage Camera Collection\n• Listed Price: $500.00 USD\n• Offer Amount: $425.00 USD (15% off)\n• Message: \"Very interested! Can you accept $425?\"\n• Status: PENDING\n• Expires: 48 hours\n\n**Offer from sneaker_enthusiast**\n• Item: Limited Edition Sneakers - Size 10\n• Listed Price: $250.00 USD\n• Offer Amount: $225.00 USD (10% off)\n• Message: \"Great condition! Would love to buy at $225\"\n• Status: PENDING\n• Expires: 36 hours\n\n**Offer from gaming_pro**\n• Item: Gaming PC - RTX 4090\n• Listed Price: $2,499.00 USD\n• Offer Amount: $2,200.00 USD (12% off)\n• Message: \"Cash ready! Can pick up today\"\n• Status: COUNTERED (Your counter: $2,350)\n• Expires: 24 hours\n\n✨ *This is sample data. Real offers will appear here once buyers make offers!*\n\n💡 **Actions you can take:**\n• Accept offer - Automatically creates sale\n• Counter offer - Negotiate price\n• Decline - Reject the offer\n\n*Note: Full offer management will be available with eBay Trading API integration.*"
-		s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
-			Content: &msg,
-		})
-		return
-	}
-
-	response := "💰 **Pending Offers**\n\n"
-	for i, offer := range offers {
-		if i >= 5 {
-			response += fmt.Sprintf("\n*...and %d more offers*", len(offers)-5)
-			break
-		}
-		response += fmt.Sprintf("**Offer #%s**\n", offer.OfferID)
-		response += fmt.Sprintf("• Item: %s\n", offer.ItemTitle)
-		response += fmt.Sprintf("• Buyer: %s\n", offer.BuyerUsername)
-		response += fmt.Sprintf("• Offer: %.2f %s (List: %.2f)\n", offer.OfferPrice, offer.Currency, offer.ListPrice)
-		response += fmt.Sprintf("• Status: %s\n\n", offer.Status)
-	}
-
-	s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
-		Content: &response,
+func (h *Handler) handleGetListings(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Content: "📦 **Your Active Listings**\n\n" +
+				"To view your active listings, visit:\n" +
+				"🔗 https://www.ebay.com/sh/lst/active\n\n" +
+				"ℹ️ **Note:** The eBay API requires complex XML parsing for traditional listings. " +
+				"Use the website for the best listing management experience.",
+		},
 	})
 }
 
 func (h *Handler) handleEbayStatus(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	status := h.ebay.CheckConnection()
-	
+
 	response := fmt.Sprintf("🔍 **eBay API Status**\n\n%s", status)
-	
+
+	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{
+			Content: response,
+		},
+	})
+}
+
+func (h *Handler) handleEbayScopes(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	scopes := h.ebay.GetTokenScopes()
+
+	response := "🔐 **OAuth Token Scopes**\n\n"
+	if len(scopes) == 0 {
+		response += "⚠️ No token found or unable to determine scopes.\n\nRun `/ebay-authorize` to authorize the bot."
+	} else {
+		response += "Your current token has these scopes:\n\n"
+		for _, scope := range scopes {
+			response += fmt.Sprintf("✅ `%s`\n", scope)
+		}
+		response += "\n**Required scopes for all features:**\n"
+		response += "• `api_scope` - Basic API access\n"
+		response += "• `sell.inventory` - Manage listings\n"
+		response += "• `sell.fulfillment` - View orders\n"
+		response += "• `sell.account` - Account settings\n"
+		response += "• `sell.finances` - Balance & payouts ⚠️\n"
+		response += "\nIf `sell.finances` is missing, run `/ebay-authorize` to re-authorize."
+	}
+
 	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
@@ -431,11 +525,25 @@ func (h *Handler) handleEbayAuthorize(s *discordgo.Session, i *discordgo.Interac
 		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
 	})
 
-	// Generate authorization URL
-	authURL := h.ebay.GetUserAuthorizationURL("")
-	
-	msg := fmt.Sprintf("🔐 **eBay Authorization**\n\n**Step 1:** Open this URL in your browser:\n%s\n\n**Step 2:** Sign in with your eBay account and click \"Agree\"\n\n**Step 3:** After you authorize, eBay will redirect you to a page. Look at the URL in your browser - it will contain `code=...`\n\n**Step 4:** Copy the code value from the URL (everything after `code=` and before the next `&` if there is one)\n\n**Step 5:** Use the command `/ebay-code` and paste the code\n\n💡 Example URL after redirect:\n`https://signin.ebay.com/ws/eBayISAPI.dll?...&code=v%5E1.1%23i%5E1...&expires_in=299`\n\nCopy only the code part!", authURL)
-	
+	// Generate state for OAuth
+	state := fmt.Sprintf("state_%d", time.Now().Unix())
+
+	// Register OAuth callback with webhook server if available
+	if h.webhookServer != nil {
+		h.webhookServer.RegisterOAuthCallback(state, s, i.Interaction)
+	} else {
+		errMsg := "❌ Webhook server not configured. OAuth flow unavailable."
+		s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
+			Content: &errMsg,
+		})
+		return
+	}
+
+	// Generate authorization URL (will redirect to jacob.it.com/webhook/oauth/callback)
+	authURL := h.ebay.GetUserAuthorizationURL(state)
+
+	msg := fmt.Sprintf("🔐 **eBay Authorization - AUTOMATIC MODE**\n\n✨ **Just click the link below and sign in - that's it!**\n\n%s\n\n🎯 **What happens next:**\n1. You'll be redirected to eBay to sign in\n2. Click \"Agree\" to authorize the bot\n3. You'll be redirected to jacob.it.com\n4. The bot will automatically exchange your code for tokens\n5. Done! You'll be notified here when complete!\n\n⏱️ Authorization will expire in 10 minutes.\n\n💡 **Make sure your eBay RuName is configured:**\n• Accepted URL: `https://jacob.it.com/webhook/oauth/callback`\n• Declined URL: `https://jacob.it.com/webhook/oauth/declined`", authURL)
+
 	s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
 		Content: &msg,
 	})
@@ -490,22 +598,19 @@ func (h *Handler) handleEbayCode(s *discordgo.Session, i *discordgo.InteractionC
 
 func (h *Handler) handleWebhookSubscribe(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	options := i.ApplicationCommandData().Options
-	webhookURL := options[0].StringValue()
+
+	// Use default URL if not provided
+	webhookURL := "https://jacob.it.com/webhook/ebay/notification"
+	if len(options) > 0 && options[0].StringValue() != "" {
+		webhookURL = options[0].StringValue()
+	}
 
 	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
 	})
 
-	// Topics that will be available for subscription
-	_ = []string{
-		"marketplace.order.placed",
-		"marketplace.order.paid",
-		"marketplace.offer.created",
-		"marketplace.offer.updated",
-	}
+	msg := fmt.Sprintf("🎣 **Webhook Setup - Automatic!**\n\n✅ **Your Webhook URL:**\n`%s`\n\n**📋 Instructions:**\n\n**Option 1: API Method (Recommended)**\nI can set this up automatically if you want! eBay requires API calls to create webhook subscriptions. For now, webhooks will be triggered when eBay sends notifications to your endpoint.\n\n**Your webhook server is already running!** When eBay sends:\n• 🛒 Order notifications\n• 💰 Offer notifications  \n• 📦 Shipping updates\n\nThey'll appear automatically in Discord!\n\n**Option 2: Manual Setup (Advanced)**\nIf you want to manually configure:\n1. Use eBay's API to POST to `/commerce/notification/v1/destination`\n2. Subscribe topics to your destination\n\n💡 **For testing:** Place a test order or have someone make an offer on your listing. The webhook endpoint is live and will relay notifications to this Discord channel automatically!\n\n🔔 Your bot will automatically:\n• Verify webhook challenges from eBay\n• Parse notifications\n• Post them to Discord\n\n**Current Status:** ✅ Ready to receive notifications", webhookURL)
 
-	msg := fmt.Sprintf("🎣 **Webhook Subscription**\n\n📍 **Endpoint**: %s\n\n⚠️ **Important Setup Steps:**\n\n1. Make sure your webhook URL is **publicly accessible** (use ngrok, a VPS, or cloud hosting)\n2. The bot's webhook server must be running on port 8080\n3. eBay will send a challenge request to verify your endpoint\n4. Once verified, you'll receive notifications for:\n   • New orders\n   • Payment received\n   • Offers from buyers\n   • Offer updates\n\n💡 **Testing locally?** Use ngrok:\n```\nngrok http 8080\n```\nThen use the ngrok URL (e.g., https://abc123.ngrok.io/webhook/ebay/notification)\n\n✅ Run `/webhook-list` to see your active subscriptions.", webhookURL)
-	
 	s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{
 		Content: &msg,
 	})

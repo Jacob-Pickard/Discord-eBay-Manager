@@ -6,6 +6,8 @@
 *.dylib
 ebaymanager-bot
 ebaymanager-bot.exe
+bin/
+ebaymanager-bot-linux
 
 # Test binary
 *.test
@@ -16,12 +18,24 @@ ebaymanager-bot.exe
 # Dependency directories
 vendor/
 
+# Logs
+logs/
+*.log
+
 # Environment variables - NEVER COMMIT THESE
+# Root level .env files
 .env
 .env.local
 .env.production
 .env.*.local
-*.env
+
+# Config directory .env files with real credentials
+config/.env.production
+config/.env.production.unix
+config/.env.sandbox.backup
+config/.env.*.local
+
+# Note: config/.env.example and config/.env.production.template ARE tracked (templates only)
 
 # Sensitive configuration files
 config.json
@@ -37,6 +51,8 @@ tokens/
 # Logs with potentially sensitive data
 logs/
 *.log
+bot_pid.txt
+bot-*.log
 
 # IDE
 .vscode/

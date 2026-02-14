@@ -61,12 +61,10 @@ Should see: "eBay Manager Bot is now running. Press CTRL+C to exit."
 ### 5. Test in Discord
 Try these commands in your Discord server:
 - [ ] `/ebay-status` - Should show connection status
-- [ ] `/list-item` - Try creating a test listing
-  - Title: "Test Item"
-  - Price: "19.99"
-  - Description: "This is a test"
 - [ ] `/get-orders` - View recent orders (may be empty in sandbox)
 - [ ] `/get-offers` - View pending offers (may be empty)
+
+**Note:** This bot manages existing eBay listings. To test offer management features, you'll need to create a test listing with Best Offer enabled on eBay's website first.
 
 ## 🐛 Troubleshooting
 
@@ -98,27 +96,26 @@ Try these commands in your Discord server:
 | OAuth Authentication | ✅ | Token refresh implemented |
 | Get Orders | ✅ | Returns last 10 orders |
 | Get Offers | ✅ | Shows pending offers |
-| Create Listing | ✅ | May need policy IDs |
 | Respond to Offers | ✅ | Accept/Decline/Counter |
 | Discord Commands | ✅ | Slash commands registered |
 | Token Auto-Refresh | ✅ | Refreshes before expiry |
 
-## 📝 What to Build Next
+**Listing Creation:** Not supported - eBay listing requirements are too complex for Discord. Use eBay's web interface instead.
 
-1. **Fulfillment Policies**: Get real policy IDs and update CreateListing
-2. **Offer Commands**: Add `/accept-offer`, `/counter-offer` commands
-3. **Webhooks**: Real-time notifications for new orders/offers
-4. **Image Upload**: Support images in listings
-5. **Order Details**: Add `/order-details [id]` command
-6. **Shipping Labels**: Integrate label purchasing
+## 📝 What to Build Next
+Offer Commands**: Test `/accept-offer`, `/counter-offer` with real sandbox offers
+2. **Webhooks**: Real-time notifications for new orders/offers
+3. **Shipping Labels**: Integrate label purchasing
+4. **Order Details**: Add `/order-details [id]` command
+5. **Analytics**: Sales statistics and reporting
 7. **Category Selector**: Make category selection easier
 
 ## 📚 Resources
 
 - [API_GUIDE.md](API_GUIDE.md) - Detailed API documentation
 - [README.md](README.md) - Project overview
-- [eBay API Docs](https://developer.ebay.com/docs)
-- [Discord Bot Docs](https://discord.com/developers/docs)
+- [README.md](README.md) - Project overview
+- [QUICK_TEST_GUIDE.md](QUICK_TEST_GUIDE.md) - Testing proceduresvelopers/docs)
 
 ## 💡 Pro Tips
 
@@ -133,8 +130,8 @@ Try these commands in your Discord server:
 Check these files for more info:
 - `API_GUIDE.md` - Complete API implementation details
 - `README.md` - General project information
-- eBay Developer Forums - Community support
-
+- eREADME.md` - General project information
+- `QUICK_TEST_GUIDE.md` - Testing procedures
 ---
 
 **Current Status**: Project ready to run! Just need your API credentials.

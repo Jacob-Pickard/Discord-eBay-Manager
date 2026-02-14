@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -22,6 +23,7 @@ type TokenResponse struct {
 	ExpiresIn    int    `json:"expires_in"`
 	RefreshToken string `json:"refresh_token,omitempty"`
 	TokenType    string `json:"token_type"`
+	Scope        string `json:"scope,omitempty"` // Space-separated list of granted scopes
 }
 
 // GetApplicationToken gets an application token using client credentials
@@ -85,7 +87,7 @@ func (c *Client) RefreshAccessToken(refreshToken string) (*TokenResponse, error)
 	data := url.Values{}
 	data.Set("grant_type", "refresh_token")
 	data.Set("refresh_token", refreshToken)
-	data.Set("scope", "https://api.ebay.com/oauth/api_scope https://api.ebay.com/oauth/api_scope/sell.inventory https://api.ebay.com/oauth/api_scope/sell.fulfillment https://api.ebay.com/oauth/api_scope/sell.account")
+	data.Set("scope", "https://api.ebay.com/oauth/api_scope https://api.ebay.com/oauth/api_scope/sell.inventory https://api.ebay.com/oauth/api_scope/sell.fulfillment https://api.ebay.com/oauth/api_scope/sell.account https://api.ebay.com/oauth/api_scope/sell.finances")
 
 	req, err := http.NewRequest("POST", tokenURL, strings.NewReader(data.Encode()))
 	if err != nil {
@@ -134,7 +136,7 @@ func (c *Client) GetUserAuthorizationURL(state string) string {
 	params.Set("client_id", c.config.AppID)
 	params.Set("response_type", "code")
 	params.Set("redirect_uri", c.config.RedirectURI) // This should be the RuName
-	params.Set("scope", "https://api.ebay.com/oauth/api_scope https://api.ebay.com/oauth/api_scope/sell.inventory https://api.ebay.com/oauth/api_scope/sell.fulfillment https://api.ebay.com/oauth/api_scope/sell.account")
+	params.Set("scope", "https://api.ebay.com/oauth/api_scope https://api.ebay.com/oauth/api_scope/sell.inventory https://api.ebay.com/oauth/api_scope/sell.fulfillment https://api.ebay.com/oauth/api_scope/sell.account https://api.ebay.com/oauth/api_scope/sell.finances")
 	if state != "" {
 		params.Set("state", state)
 	}
@@ -176,6 +178,9 @@ func (c *Client) ExchangeCodeForToken(code string) (*TokenResponse, error) {
 		return nil, fmt.Errorf("failed to read token exchange response: %w", err)
 	}
 
+	// Log full response for debugging OAuth issues
+	log.Printf("[DEBUG] Token Exchange Response: %s", string(body))
+
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("token exchange failed with status %d: %s", resp.StatusCode, string(body))
 	}
@@ -184,6 +189,9 @@ func (c *Client) ExchangeCodeForToken(code string) (*TokenResponse, error) {
 	if err := json.Unmarshal(body, &tokenResp); err != nil {
 		return nil, fmt.Errorf("failed to parse token exchange response: %w", err)
 	}
+
+	// Log the granted scopes for debugging
+	log.Printf("🔑 OAuth tokens obtained - Granted scopes: %s", tokenResp.Scope)
 
 	// Update the client's tokens
 	c.config.AccessToken = tokenResp.AccessToken
@@ -196,11 +204,11 @@ func (c *Client) ExchangeCodeForToken(code string) (*TokenResponse, error) {
 
 // TokenManager helps manage token expiration and refresh
 type TokenManager struct {
-	client         *Client
-	accessToken    string
-	refreshToken   string
-	expiresAt      time.Time
-	refreshBefore  time.Duration // Refresh token this duration before expiry
+	client        *Client
+	accessToken   string
+	refreshToken  string
+	expiresAt     time.Time
+	refreshBefore time.Duration // Refresh token this duration before expiry
 }
 
 // NewTokenManager creates a new token manager
@@ -230,7 +238,7 @@ func (tm *TokenManager) GetValidToken() (string, error) {
 
 		tm.accessToken = tokenResp.AccessToken
 		tm.expiresAt = time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
-		
+
 		// Update refresh token if a new one was provided
 		if tokenResp.RefreshToken != "" {
 			tm.refreshToken = tokenResp.RefreshToken

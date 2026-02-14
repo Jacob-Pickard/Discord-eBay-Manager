@@ -16,10 +16,10 @@ import (
 
 // Server handles incoming eBay webhook notifications
 type Server struct {
-	discord      *discordgo.Session
-	channelID    string
-	verifyToken  string
-	port         string
+	discord     *discordgo.Session
+	channelID   string
+	verifyToken string
+	port        string
 }
 
 // NewServer creates a new webhook server
@@ -38,11 +38,14 @@ func (s *Server) Start() error {
 	http.HandleFunc("/webhook/ebay/challenge", s.handleChallenge)
 	http.HandleFunc("/webhook/health", s.handleHealth)
 
+	// Setup OAuth callback handlers
+	s.SetupOAuthHandlers()
+
 	addr := ":" + s.port
 	log.Printf("🎣 Webhook server starting on %s", addr)
 	log.Printf("📍 Notification endpoint: http://localhost%s/webhook/ebay/notification", addr)
 	log.Printf("📍 Challenge endpoint: http://localhost%s/webhook/ebay/challenge", addr)
-	
+
 	return http.ListenAndServe(addr, nil)
 }
 
@@ -67,7 +70,7 @@ func (s *Server) handleChallenge(w http.ResponseWriter, r *http.Request) {
 	hash.Write([]byte(challengeCode))
 	hash.Write([]byte(s.verifyToken))
 	hash.Write([]byte(r.URL.Path))
-	
+
 	challengeResponse := base64.StdEncoding.EncodeToString(hash.Sum(nil))
 
 	// Return JSON response
@@ -77,7 +80,7 @@ func (s *Server) handleChallenge(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
-	
+
 	log.Printf("✅ Challenge response sent successfully")
 }
 
@@ -146,13 +149,13 @@ func (s *Server) processNotification(notification *EbayNotification) {
 	}
 
 	embed := s.buildDiscordEmbed(notification)
-	
+
 	_, err := s.discord.ChannelMessageSendEmbed(s.channelID, embed)
 	if err != nil {
 		log.Printf("❌ Failed to send Discord notification: %v", err)
 		return
 	}
-	
+
 	log.Printf("✅ Notification sent to Discord channel %s", s.channelID)
 }
 
@@ -169,32 +172,32 @@ func (s *Server) buildDiscordEmbed(notification *EbayNotification) *discordgo.Me
 		embed.Color = 0x00ff00
 		embed.Title = "💰 Item Sold!"
 		embed.Description = "You have a new sale!"
-		
+
 	case "ORDER_PAYMENT_RECEIVED":
 		embed.Color = 0x00ff00
 		embed.Title = "💵 Payment Received"
 		embed.Description = "Payment has been received for an order"
-		
+
 	case "ORDER_SHIPPED":
 		embed.Color = 0x3498db
 		embed.Title = "📦 Order Shipped"
 		embed.Description = "An order has been marked as shipped"
-		
+
 	case "OFFER_RECEIVED":
 		embed.Color = 0xffaa00
 		embed.Title = "💬 Offer Received"
 		embed.Description = "You have received a new offer from a buyer"
-		
+
 	case "OFFER_COUNTERED":
 		embed.Color = 0xffaa00
 		embed.Title = "💬 Offer Countered"
 		embed.Description = "A buyer has countered your offer"
-		
+
 	case "LISTING_ENDED":
 		embed.Color = 0xff6600
 		embed.Title = "⏰ Listing Ended"
 		embed.Description = "One of your listings has ended"
-		
+
 	default:
 		embed.Description = fmt.Sprintf("Event: %s", notification.NotificationEventType)
 	}

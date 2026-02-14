@@ -7,12 +7,13 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/bwmarrin/discordgo"
-	"github.com/joho/godotenv"
 	"ebaymanager-bot/internal/bot"
 	"ebaymanager-bot/internal/config"
 	"ebaymanager-bot/internal/ebay"
 	"ebaymanager-bot/internal/webhook"
+
+	"github.com/bwmarrin/discordgo"
+	"github.com/joho/godotenv"
 )
 
 func main() {
@@ -45,17 +46,19 @@ func main() {
 
 	log.Printf("Connected as: %s#%s (ID: %s)", discord.State.User.Username, discord.State.User.Discriminator, discord.State.User.ID)
 
-	// Initialize bot and register commands after connection is open
-	botHandler := bot.NewHandler(discord, ebayClient)
-	botHandler.RegisterCommands()
-
-	// Start webhook server in background
+	// Start webhook server in background first
 	webhookServer := webhook.NewServer(discord, cfg.NotificationChannelID, cfg.WebhookVerifyToken, cfg.WebhookPort)
+	webhook.SetEbayClient(ebayClient) // Set eBay client for OAuth (package-level)
 	go func() {
 		if err := webhookServer.Start(); err != nil {
 			log.Printf("⚠️ Webhook server error: %v", err)
 		}
 	}()
+
+	// Initialize bot and register commands after connection is open
+	botHandler := bot.NewHandler(discord, ebayClient)
+	botHandler.SetWebhookServer(webhookServer) // Pass webhook server for OAuth
+	botHandler.RegisterCommands()
 
 	fmt.Println("eBay Manager Bot is now running. Press CTRL+C to exit.")
 

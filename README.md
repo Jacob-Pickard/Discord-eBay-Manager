@@ -1,79 +1,135 @@
 # eBay Manager Discord Bot
 
-A Discord bot written in Go that helps manage your eBay business, including listing items, tracking orders, handling offers, and receiving real-time notifications through webhooks.
+A production-ready Discord bot written in Go that helps you manage your eBay business operations. View orders, respond to offers, and receive real-time notifications through webhooks - all from Discord.
+
+**Current Status:** ✅ **Deployed to Production** | Running 24/7 on Ubuntu Server 22.04
 
 ## ⚡ Features
 
-### ✅ Currently Implemented
+### ✅ Fully Implemented & Working
 
-- **🔐 OAuth 2.0 Authentication**
-  - Full OAuth flow with authorization code exchange
+- **🔐 Automatic OAuth 2.0 Authentication**
+  - **NEW:** Fully automatic OAuth flow through webhook server
+  - User clicks authorization link → eBay redirects → Bot automatically exchanges code
+  - No manual code copying required!
   - Automatic token refresh (every 90 minutes)
   - Tokens saved to `.env` file
-  - Manual code submission via Discord command
+  - Production webhook callbacks: `https://jacob.it.com/webhook/oauth/callback`
 
 - **📦 Order Management**
   - View recent orders with `/get-orders`
+  - **NEW:** Image loading with Browse API integration
   - Detailed order information (buyer, items, status, total)
-  - Fallback to sample data in sandbox environment
-
-- **💰 Offer Management**
-  - View pending buyer offers with `/get-offers`
-  - Accept offers with `/accept-offer`
-  - Counter offers with `/counter-offer`
-  - Decline offers with `/decline-offer`
-
-- **💵 Financial Information**
-  - View account balance with `/get-balance`
-  - View recent payouts with `/get-payouts`
-  - Transaction history
-
-- **💬 Buyer Messages**
-  - View buyer messages with `/get-messages`
-  - Unread message indicators
+  - Fallback image URL generation for legacy items
+  - Rich Discord embeds with buyer information
 
 - **🔔 Real-time Webhook Notifications**
-  - Webhook server on port 8080
+  - Production webhook server on port 8081
+  - Public endpoint: `https://jacob.it.com/webhook/`
   - SHA-256 challenge verification
   - Automatic Discord notifications for:
     - New orders (`MARKETPLACE_ACCOUNT.ORDER.FULFILLED`)
     - Best offers (`MARKETPLACE_ACCOUNT.OFFER.UPDATED`)
-    - Messages (`MARKETPLACE_ACCOUNT.QUESTION.CREATED`)
-  - Subscribe/list webhooks via Discord commands
+  - Subscribe via `/webhook-subscribe` command
+  - **NOTE:** Offer notifications require setup - see "How to Enable Offer Notifications" below
 
 - **📊 Status Monitoring**
-  - Check eBay API connection status
-  - View environment (Sandbox/Production)
-  - Token validation
+  - Check eBay API connection with `/ebay-status`
+  - View OAuth scopes with `/ebay-scopes`
+  - Token validation and environment info
 
-### 🚧 Planned / In Development
+### ⚠️ Limited / Requires Setup
 
-- **📝 Listing Creation**
-  - Create new eBay listings directly from Discord
-  - Image upload support
-  - Bulk listing management
+- **💰 Offer Management**
+  - Accept offers with `/accept-offer`
+  - Counter offers with `/counter-offer`
+  - Decline offers with `/decline-offer`
+  - **NOTE:** Viewing offers requires webhook subscription
+  - Run `/get-offers` for setup instructions
 
-- **🏷️ Shipping Integration**
-  - Purchase shipping labels
-  - Track shipments
-  - Update tracking information on eBay
+- **📦 Listing Viewer**
+  - `/get-listings` - Links to eBay's active listings page
+  - **LIMITATION:** eBay API requires complex XML parsing for traditional listings
+  - Best managed through eBay website
 
-- **📈 Analytics & Reporting**
-  - Sales statistics
-  - Performance metrics
-  - Revenue tracking
+### ❌ Currently Not Available
 
-- **🤖 Automation**
-  - Automated offer responses based on rules
-  - Bulk operations
-  - Scheduled tasks
+- **💵 Financial Information** (Requires eBay Developer Approval)
+  - `/get-balance` - Returns 404
+  - `/get-payouts` - Returns 404
+  - **REASON:** Finances API scope not granted by eBay
+  - **SOLUTION:** Contact eBay Developer Support to enable Finances API for your keyset
+  - Your account DOES have Managed Payments enabled
+  - Your keyset DOES have Finances API enabled in Developer Portal
+  - Issue: OAuth token doesn't include `sell.finances` scope
+
+- **💬 Buyer Messages** (API Limitation)
+  - **REASON:** Post-Order API doesn't support OAuth Bearer tokens
+  - Requires legacy IAF authentication (being phased out by eBay)
+  - **WORKAROUND:** Check messages on eBay.com
+
+### ❌ Out of Scope
+
+- **Listing Creation**: Not feasible through Discord due to eBay's complex listing requirements (item specifics, categories, shipping policies) and Discord's image compression. Use eBay's web interface or dedicated listing tools instead.
 
 ## 📋 Prerequisites
 
-- Go 1.21 or higher
+- Go 1.25.6 or higher
 - Discord Bot Token
-- eBay Developer Account with API credentials
-- Public URL for webhook endpoint (ngrok, hosted server, etc.)
+- eBay Developer Account with **Production** API credentials
+- Public domain with HTTPS for webhook endpoint (e.g., jacob.it.com)
+- Ubuntu/Linux server for deployment (Windows cross-compilation supported)
+
+## 🚀 Production Deployment
+
+**Current Server Configuration:**
+- **OS:** Ubuntu Server 22.04.5 LTS
+- **Server:** jacob.it.com (192.168.0.12)
+- **Service:** systemd service `ebay-bot.service`
+- **Binary:** Cross-compiled from Windows using `GOOS=linux GOARCH=amd64`
+- **Logs:** `/home/jacob/ebay-bot/bot.log` and `/home/jacob/ebay-bot/bot-error.log`
+- **Webhook:** Nginx reverse proxy to port 8081 with Let's Encrypt SSL
+
+### Deployment Script
+
+Use the automated deployment script:
+```powershell
+.\scripts\deploy.ps1
+```
+
+Or manually:
+```powershell
+# Build for Linux
+$env:GOOS="linux"
+$env:GOARCH="amd64"
+go build -o bin/ebaymanager-bot-linux
+
+# Deploy to server
+scp bin/ebaymanager-bot-linux jacob@192.168.0.12:/home/jacob/ebay-bot/
+ssh jacob@192.168.0.12 "chmod +x /home/jacob/ebay-bot/ebaymanager-bot-linux && sudo systemctl restart ebay-bot"
+
+# Check status
+ssh jacob@192.168.0.12 "sudo systemctl status ebay-bot"
+```
+
+### Service Management
+
+```bash
+# Start the bot
+sudo systemctl start ebay-bot
+
+# Stop the bot
+sudo systemctl stop ebay-bot
+
+# Restart the bot
+sudo systemctl restart ebay-bot
+
+# Check status
+sudo systemctl status ebay-bot
+
+# View logs
+tail -f /home/jacob/ebay-bot/bot-error.log
+```
 
 ## Setup
 
@@ -156,29 +212,113 @@ ebaymanager-bot.exe  # On Windows
 
 ### Authentication
 - `/ebay-status` - Check eBay API connection status
-- `/ebay-authorize` - Get authorization URL to connect your eBay account
-- `/ebay-code` - Submit authorization code after eBay redirect
+- `/ebay-scopes` - View current OAuth scopes granted by eBay
+- `/ebay-authorize` - **Automatic OAuth!** Get authorization URL - just click and sign in
+- `/ebay-code` - Manual authorization code submission (backup method)
 
 ### Order Management
-- `/get-orders` - View recent eBay orders with buyer details
+- `/get-orders [limit]` - ✅ View recent eBay orders with buyer details and images
 
 ### Offer Management
-- `/get-offers` - View pending buyer offers (best offers)
-- `/accept-offer` - Accept a buyer's offer
-- `/counter-offer` - Counter an offer with a different price
-- `/decline-offer` - Decline a buyer's offer
+- `/get-offers` - View instructions for setting up webhook offer notifications
+- `/accept-offer <offer_id>` - Accept a buyer's offer
+- `/counter-offer <offer_id> <price>` - Counter an offer with a different price
+- `/decline-offer <offer_id>` - Decline a buyer's offer
 
-### Financial Information
-- `/get-balance` - View your eBay account balance
-- `/get-payouts` - View recent payouts and transactions
+### Listing Management
+- `/get-listings` - Link to eBay's active listings page (API limitations prevent direct listing)
+
+### Financial Information (⚠️ Requires eBay Developer Approval)
+- `/get-balance` - ❌ Currently returns 404 - Awaiting Finances API scope approval
+- `/get-payouts` - ❌ Currently returns 404 - Awaiting Finances API scope approval
 
 ### Communication
-- `/get-messages` - View buyer messages
+- `/get-messages` - ❌ Not supported (Post-Order API doesn't support OAuth)
 
-### Webhook Management
-- `/webhook-subscribe` - Subscribe to eBay real-time notifications
-- `/webhook-list` - List active webhook subscriptions
-- `/webhook-test` - Test webhook notification to current channel
+### Webhook Management  
+- `/webhook-subscribe` - ✅ Subscribe to eBay real-time notifications (ORDER, OFFER)
+- `/webhook-list` - ✅ List active webhook subscriptions
+- `/webhook-test` - ✅ Test webhook notification to current channel
+
+## 🔧 How to Enable Offer Notifications
+
+Since eBay's API doesn't provide a direct endpoint to list offers, you'll receive them via webhooks:
+
+1. Run `/webhook-subscribe` in Discord
+2. Select **OFFER** from the notification types
+3. When a buyer makes an offer, you'll get an instant Discord notification with:
+   - Offer ID
+   - Item details
+   - Buyer's offer amount
+   - Your list price
+4. Use `/accept-offer`, `/counter-offer`, or `/decline-offer` to respond
+
+## ⚠️ Known Issues & Limitations
+
+### Requires eBay Developer Support
+
+**Financial APIs (404 errors):**
+- Issue: `/get-balance` and `/get-payouts` return 404
+- Cause: OAuth token doesn't include `sell.finances` scope
+- Evidence: Your eBay keyset HAS Finances API enabled in Developer Portal
+- Evidence: Your account HAS Managed Payments enabled
+- Evidence: OAuth token response from eBay doesn't include any scope field
+- **Solution:** Contact eBay Developer Support to request Finances API scope for your RuName
+- Until resolved, check finances on eBay.com
+
+**Messages API (401 errors):**
+- Issue: `/get-messages` returns 401 "Bad scheme: Bearer"
+- Cause: Post-Order API requires legacy IAF authentication, not OAuth Bearer tokens
+- IAF authentication is being phased out by eBay
+- **Solution:** None available - check messages on eBay.com
+
+### API Design Limitations
+
+**Listings:**
+- Viewing listings requires Trading API with complex XML parsing
+- Current implementation provides link to eBay's active listings page
+- Traditional eBay listings (non-inventory) don't work well with REST APIs
+
+**Offers:**
+- No direct API endpoint to list all offers
+- Requires webhook subscription for real-time notifications
+- `/get-offers` provides setup instructions
+
+## 🐛 Troubleshooting
+
+### OAuth Issues
+
+**"Authorization Successful" but APIs still fail:**
+- Check granted scopes with `/ebay-scopes`
+- If `sell.finances` is missing, contact eBay Developer Support
+- RuName must be configured with webhook callback URLs:
+  - Auth accepted: `https://jacob.it.com/webhook/oauth/callback`
+  - Auth declined: `https://jacob.it.com/webhook/oauth/declined`
+
+**Bot doesn't respond to OAuth callback:**
+- Ensure RuName is configured correctly in eBay Developer Portal
+- Verify webhook server is running: `sudo systemctl status ebay-bot`
+- Check logs: `tail -f /home/jacob/ebay-bot/bot-error.log`
+- Look for "OAuth callback received" message
+
+### Webhook Issues
+
+**Not receiving offer notifications:**
+1. Check subscription status with `/webhook-list`
+2. Verify webhook endpoint is accessible: `https://jacob.it.com/webhook/health`
+3. Re-subscribe with `/webhook-subscribe` if needed
+4. Check webhook logs for incoming notifications
+
+### Financial API 404 Errors
+
+**Even after re-authorization:**
+- This is an eBay permission issue, not a bot issue
+- Your keyset needs Finances API scope approval from eBay
+- Use `/ebay-scopes` to confirm which scopes you have
+- Contact api@ebay.com with your:
+  - App ID (Client ID)
+  - RuName
+  - Request for Finances API scope approval
 
 ## 📁 Project Structure
 
@@ -210,60 +350,73 @@ ebaymanager-bot/
 - [x] Discord bot setup with slash commands
 - [x] eBay API client structure
 - [x] Configuration management via environment variables
+- [x] Production deployment on Ubuntu Server
+- [x] Systemd service configuration
+- [x] Cross-compilation from Windows to Linux
 
 ### ✅ Phase 2: eBay OAuth & Authentication (COMPLETE)
 - [x] OAuth 2.0 authorization code flow
+- [x] **Automatic token exchange via webhook server**
 - [x] Automatic token refresh (every 90 minutes)
 - [x] Secure token storage in .env file
 - [x] Discord command integration for auth
+- [x] OAuth scope diagnostics (`/ebay-scopes`)
 
 ### ✅ Phase 3: Basic eBay Operations (COMPLETE)
-- [x] Fetch orders from Fulfillment API
-- [x] Fetch offers from Negotiation API
+- [x] Fetch orders from Fulfillment API with image support
+- [x] Browse API integration for item images
+- [x] Image URL fallback generation
+- [x] Fetch offers guidance (webhook-based)
 - [x] Accept/decline/counter offers via Negotiation API
-- [x] View account balance and payouts
-- [x] View buyer messages
 
 ### ✅ Phase 4: Webhook Integration (COMPLETE)
 - [x] Webhook HTTP server with challenge verification
-- [x] Real-time Discord notifications for orders, offers, messages
+- [x] Production HTTPS endpoint with Nginx reverse proxy
+- [x] Real-time Discord notifications for orders and offers
 - [x] Subscription management via Discord commands
-- [x] Production-ready SHA-256 verification
+- [x] OAuth callback integration in webhook server
+- [x] SHA-256 verification for eBay notifications
 
-### 🚧 Phase 5: Listing Management (PLANNED)
-- [ ] Create listings using Inventory API
-- [ ] Bulk listing operations
-- [ ] Image upload support
-- [ ] Inventory tracking
+### ⏸️ Phase 5: Financial APIs (BLOCKED - Awaiting eBay Approval)
+- [ ] Account balance (API: 404 - scope not granted)
+- [ ] Payout history (API: 404 - scope not granted)
+- [ ] Transaction details (API: 404 - scope not granted)
+- **Blocker:** Requires `sell.finances` scope approval from eBay Developer Support
 
-### 🚧 Phase 6: Shipping Integration (PLANNED)
-- [ ] Purchase shipping labels via Buy API
-- [ ] Track shipments
-- [ ] Update tracking information on orders
+### ❌ Phase 6: Messages API (BLOCKED - API Limitation)
+- [ ] Buyer messages (API: 401 - OAuth not supported)
+- **Blocker:** Post-Order API requires legacy IAF authentication
 
 ### 🚧 Phase 7: Advanced Features (PLANNED)
+- [ ] Shipping label integration
 - [ ] Analytics and sales reporting
 - [ ] Automated offer response rules
-- [ ] Inventory tracking and alerts
 - [ ] Performance metrics dashboard
 
-## 📊 eBay API Endpoints Currently Used
+## 📊 eBay API Endpoints
 
-### ✅ Implemented
-- **OAuth 2.0 API**: `/identity/v1/oauth2/token` - Token exchange & refresh
-- **Fulfillment API**: `/sell/fulfillment/v1/order` - Fetch orders
-- **Negotiation API**: `/sell/negotiation/v1/offer` - Manage buyer offers
-- **Finances API**: `/sell/finances/v1/seller_funds_summary` - Account balance
-- **Finances API**: `/sell/finances/v1/payout` - View payouts
-- **Post-Order API**: `/post-order/v2/inquiry/search` - Buyer messages
-- **Marketplace Notification API**: `/commerce/notification/v1/destination` - Webhooks
+### ✅ Working in Production
+- **OAuth 2.0 API**: `/identity/v1/oauth2/token` - Token exchange & refresh ✅
+- **Fulfillment API**: `/sell/fulfillment/v1/order` - Fetch orders ✅
+- **Browse API**: `/buy/browse/v1/item/get_item_by_legacy_id` - Item images ✅
+- **Negotiation API**: `/sell/negotiation/v1/offer/{id}/respond` - Manage offers ✅
+- **Marketplace Notification API**: `/commerce/notification/v1/destination` - Webhooks ✅
 
-### 🚧 Planned
-- **Inventory API**: `/sell/inventory/v1/inventory_item` - Create/manage listings
-- **Buy API**: For purchasing shipping labels
-- **Analytics API**: Sales and performance data
+### ❌ Blocked - Requires eBay Developer Approval
+- **Finances API**: `/sell/finances/v1/seller_funds_summary` - 404 (scope not granted) ❌
+- **Finances API**: `/sell/finances/v1/payout` - 404 (scope not granted) ❌
+- **Finances API**: `/sell/finances/v1/transaction` - 404 (scope not granted) ❌
+
+### ❌ Not Supported - API Limitation
+- **Post-Order API**: `/post-order/v2/inquiry/search` - 401 (OAuth not supported) ❌
+
+### 🚧 Not Implemented
+- **Buy API**: Shipping labels
+- **Analytics API**: Performance metrics
+- **Inventory API**: Listing management (complex XML required)
 
 ## 🔒 Security & Production Readiness
+
 
 ### ✅ Security Measures in Place
 - `.env` file excluded from Git via `.gitignore`
@@ -316,11 +469,10 @@ See [PRODUCTION_READINESS.md](PRODUCTION_READINESS.md) for detailed testing and 
 - [WEBHOOK_SETUP.md](WEBHOOK_SETUP.md) - Webhook configuration details
 - [PRODUCTION_READINESS.md](PRODUCTION_READINESS.md) - Production deployment checklist
 - [TESTING_GUIDE.md](TESTING_GUIDE.md) - Testing procedures
-
-## 🤝 Contributing
-
-This is a personal project, but feel free to fork and modify for your own use. Pull requests are welcome!
-
+QUICKSTART.md](QUICKSTART.md) - Quick setup guide
+- [WEBHOOK_SETUP.md](WEBHOOK_SETUP.md) - Webhook configuration details
+- [PRODUCTION_READINESS.md](PRODUCTION_READINESS.md) - Production deployment checklist
+- [QUICK_TEST_GUIDE.md](QUICK_TEST
 ## ⚠️ Important Security Notes
 
 **NEVER COMMIT SENSITIVE DATA:**

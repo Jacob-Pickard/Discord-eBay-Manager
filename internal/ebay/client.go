@@ -1,20 +1,22 @@
-package ebay
+﻿package ebay
 
 import (
 	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"ebaymanager-bot/internal/config"
 )
 
 const (
-	sandboxAPIURL    = "https://api.sandbox.ebay.com"
-	productionAPIURL = "https://api.ebay.com"
-	sandboxAuthURL   = "https://auth.sandbox.ebay.com/oauth2/authorize"
+	sandboxAPIURL     = "https://api.sandbox.ebay.com"
+	productionAPIURL  = "https://api.ebay.com"
+	sandboxAuthURL    = "https://auth.sandbox.ebay.com/oauth2/authorize"
 	productionAuthURL = "https://auth.ebay.com/oauth2/authorize"
 )
 
@@ -30,7 +32,7 @@ type Client struct {
 func NewClient(cfg config.EbayConfig) *Client {
 	baseURL := sandboxAPIURL
 	authURL := sandboxAuthURL
-	
+
 	if cfg.Environment == "PRODUCTION" {
 		baseURL = productionAPIURL
 		authURL = productionAuthURL
@@ -49,14 +51,26 @@ func NewClient(cfg config.EbayConfig) *Client {
 // CheckConnection verifies the eBay API connection
 func (c *Client) CheckConnection() string {
 	if c.config.AccessToken == "" {
-		return "❌ No access token configured. You need to authenticate with eBay first."
+		return "âŒ No access token configured. You need to authenticate with eBay first."
 	}
 
 	// Try a simple API call to verify connection
 	// TODO: Implement actual API call
-	return fmt.Sprintf("✅ Connected to eBay API (%s mode)\n🔑 Access token: %s...", 
-		c.config.Environment, 
+	return fmt.Sprintf("âœ… Connected to eBay API (%s mode)\nðŸ”‘ Access token: %s...",
+		c.config.Environment,
 		c.config.AccessToken[:10])
+}
+
+// GetTokenScopes returns the OAuth scopes that would be requested for a new token
+func (c *Client) GetTokenScopes() []string {
+	// These are the scopes we configure in oauth.go
+	return []string{
+		"api_scope",
+		"sell.inventory",
+		"sell.fulfillment",
+		"sell.account",
+		"sell.finances",
+	}
 }
 
 // makeRequest is a helper to make authenticated requests to eBay API
@@ -70,7 +84,8 @@ func (c *Client) makeRequest(method, endpoint string, body interface{}) ([]byte,
 		reqBody = bytes.NewBuffer(jsonData)
 	}
 
-	req, err := http.NewRequest(method, c.baseURL+endpoint, reqBody)
+	fullURL := c.baseURL + endpoint
+	req, err := http.NewRequest(method, fullURL, reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -81,6 +96,12 @@ func (c *Client) makeRequest(method, endpoint string, body interface{}) ([]byte,
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Language", "en-US")
 	req.Header.Set("Accept-Language", "en-US")
+
+	// Log request details for Finances API debugging
+	if strings.Contains(endpoint, "/finances/") {
+		log.Printf("[DEBUG] Finances API Request: %s %s", method, fullURL)
+		log.Printf("[DEBUG] Access Token (first 20 chars): %s...", c.config.AccessToken[:20])
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -93,7 +114,13 @@ func (c *Client) makeRequest(method, endpoint string, body interface{}) ([]byte,
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
+	// Enhanced logging for Finances API errors
 	if resp.StatusCode >= 400 {
+		if strings.Contains(endpoint, "/finances/") {
+			log.Printf("[DEBUG] Finances API Error - Status: %d", resp.StatusCode)
+			log.Printf("[DEBUG] Response Headers: %v", resp.Header)
+			log.Printf("[DEBUG] Response Body: %s", string(respBody))
+		}
 		return nil, fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
 	}
 
@@ -113,7 +140,7 @@ func (c *Client) GetOrders(limit int) ([]Order, error) {
 	}
 
 	endpoint := fmt.Sprintf("/sell/fulfillment/v1/order?limit=%d", limit)
-	
+
 	respBody, err := c.makeRequest("GET", endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get orders: %w", err)
@@ -122,6 +149,36 @@ func (c *Client) GetOrders(limit int) ([]Order, error) {
 	var ordersResp OrdersResponse
 	if err := json.Unmarshal(respBody, &ordersResp); err != nil {
 		return nil, fmt.Errorf("failed to parse orders response: %w", err)
+	}
+
+	// Process orders to populate computed fields
+	for i := range ordersResp.Orders {
+		order := &ordersResp.Orders[i]
+
+		// Extract buyer username
+		order.BuyerUsername = order.Buyer.Username
+
+		// Extract price and currency
+		fmt.Sscanf(order.PricingSummary.Total.Value, "%f", &order.TotalPrice)
+		order.Currency = order.PricingSummary.Total.Currency
+
+		// Extract fulfillment status
+		order.FulfillmentStatus = order.OrderFulfillmentStatus
+
+		// Process line items to get images and prices
+		for j := range order.LineItems {
+			lineItem := &order.LineItems[j]
+
+			// Extract line item price
+			fmt.Sscanf(lineItem.LineItemCost.Value, "%f", &lineItem.Price)
+
+			// eBay Fulfillment API doesn't include images, so fetch from Inventory API
+			if lineItem.LegacyItemId != "" {
+				if img := c.getItemImage(lineItem.LegacyItemId); img != "" {
+					lineItem.ImageUrl = img
+				}
+			}
+		}
 	}
 
 	return ordersResp.Orders, nil
@@ -134,7 +191,7 @@ func (c *Client) GetOrderByID(orderID string) (*Order, error) {
 	}
 
 	endpoint := fmt.Sprintf("/sell/fulfillment/v1/order/%s", orderID)
-	
+
 	respBody, err := c.makeRequest("GET", endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get order: %w", err)
@@ -148,6 +205,34 @@ func (c *Client) GetOrderByID(orderID string) (*Order, error) {
 	return &order, nil
 }
 
+// getItemImage fetches the image URL for a specific item using Browse API
+func (c *Client) getItemImage(legacyItemId string) string {
+	// Use eBay's Browse API to get item details with images
+	// Browse API uses item_id format, needs conversion from legacy ID
+	endpoint := fmt.Sprintf("/buy/browse/v1/item/get_item_by_legacy_id?legacy_item_id=%s", legacyItemId)
+	respBody, err := c.makeRequest("GET", endpoint, nil)
+	if err != nil {
+		// If Browse API fails, try standard thumb URL pattern
+		return fmt.Sprintf("https://thumbs.ebayimg.com/thumbs/g/%s/s-l225.jpg", legacyItemId)
+	}
+
+	var result struct {
+		Image struct {
+			ImageUrl string `json:"imageUrl"`
+		} `json:"image"`
+	}
+
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return fmt.Sprintf("https://thumbs.ebayimg.com/thumbs/g/%s/s-l225.jpg", legacyItemId)
+	}
+
+	if result.Image.ImageUrl != "" {
+		return result.Image.ImageUrl
+	}
+
+	return fmt.Sprintf("https://thumbs.ebayimg.com/thumbs/g/%s/s-l225.jpg", legacyItemId)
+}
+
 // OffersResponse represents the response from the offers API
 type OffersResponse struct {
 	Offers []Offer `json:"offers"`
@@ -157,66 +242,34 @@ type OffersResponse struct {
 }
 
 // GetOffers fetches pending buyer offers (best offers) from eBay
-// Note: This is a placeholder - eBay's Best Offer API requires the Trading API
-// The Inventory API only returns seller offers (listings), not buyer offers
 func (c *Client) GetOffers() ([]Offer, error) {
 	if c.config.AccessToken == "" {
 		return nil, fmt.Errorf("no access token available")
 	}
 
-	// For now, return empty list with a note
-	// To get actual buyer offers, you'd need to:
-	// 1. Use the Trading API GetMyeBayBuying/GetMyeBaySelling
-	// 2. Or check individual listings for offers
-	// 3. Or use eBay's notification system for new offers
-	
+	// Note: eBay's Sell APIs don't have a direct "buyer offers" endpoint
+	// Best offers are integrated into the Inventory API per listing
+	// For webhooks, you'll get OFFER notifications
+	// For now, return empty list - offers will be handled via webhooks
+
 	return []Offer{}, nil
 }
 
-// InventoryItemRequest represents the request body for creating an inventory item
-type InventoryItemRequest struct {
-	Availability struct {
-		ShipToLocationAvailability struct {
-			Quantity int `json:"quantity"`
-		} `json:"shipToLocationAvailability"`
-	} `json:"availability"`
-	Condition            string `json:"condition"`
-	ConditionDescription string `json:"conditionDescription,omitempty"`
-	Product              struct {
-		Title       string   `json:"title"`
-		Description string   `json:"description"`
-		ImageURLs   []string `json:"imageUrls,omitempty"`
-		Aspects     map[string][]string `json:"aspects,omitempty"`
-	} `json:"product"`
-}
-
-// CreateListing creates a new eBay listing using the Inventory API
-func (c *Client) CreateListing(listing *Listing) error {
+// GetListings retrieves active inventory listings
+func (c *Client) GetListings(limit int) ([]map[string]interface{}, error) {
 	if c.config.AccessToken == "" {
-		return fmt.Errorf("no access token available")
+		return nil, fmt.Errorf("no access token available")
 	}
 
-	// Step 1: Create or update inventory item
-	invItem := InventoryItemRequest{}
-	invItem.Availability.ShipToLocationAvailability.Quantity = listing.Quantity
-	invItem.Condition = listing.Condition
-	invItem.Product.Title = listing.Title
-	invItem.Product.Description = listing.Description
-	invItem.Product.ImageURLs = listing.ImageURLs
-
-	endpoint := fmt.Sprintf("/sell/inventory/v1/inventory_item/%s", listing.SKU)
-	_, err := c.makeRequest("PUT", endpoint, invItem)
-	if err != nil {
-		return fmt.Errorf("failed to create inventory item: %w", err)
-	}
-
-	// Note: To publish the listing, you need to:
-	// 1. Create fulfillment, payment, and return policies in your eBay account
-	// 2. Create an offer with those policy IDs
-	// 3. Publish the offer
-	// For now, the item is added to your inventory but not published
-
-	return nil
+	// Note: Listing retrieval requires either:
+	// 1. Inventory API with proper SKU management (not standard eBay listings)
+	// 2. Trading API with XML parsing (slow, complex)
+	// 3. Browse API (public data only, no seller-specific listings)
+	//
+	// For now, return guidance to check listings on eBay directly
+	return []map[string]interface{}{
+		{"message": "Listing retrieval requires Trading API XML parsing or inventory management. Check your active listings at: https://www.ebay.com/sh/lst/active"},
+	}, nil
 }
 
 // RespondToOffer accepts, declines, or counters a buyer offer
@@ -265,91 +318,69 @@ func (c *Client) RespondToOffer(offerID string, action string, counterPrice floa
 
 // GetSellerBalance retrieves seller account balance information
 func (c *Client) GetSellerBalance() (map[string]float64, error) {
-	// Try to get real balance from Finances API
-	respData, err := c.makeRequest("GET", "/sell/finances/v1/seller_funds_summary", nil)
+	// Try the transactions endpoint to calculate balance
+	respData, err := c.makeRequest("GET", "/sell/finances/v1/transaction?limit=50", nil)
 	if err != nil {
-		// Fall back to sample data if API not available (sandbox/permissions)
-		return map[string]float64{
-			"totalBalance":    1234.56,
-			"available":       1000.00,
-			"pending":         234.56,
-			"salesThisMonth":  5432.10,
-			"feesThisMonth":   -543.21,
-			"netIncome":       4888.89,
-		}, nil
+		log.Printf("[DEBUG] Balance API error: %v", err)
+		// If transactions fail, could mean no Managed Payments or missing OAuth scope
+		if strings.Contains(err.Error(), "404") {
+			return nil, fmt.Errorf("finances API not available - try /ebay-authorize to re-authorize with Finances API scope, or check your eBay keyset has Finances API enabled in Developer Portal")
+		}
+		if strings.Contains(err.Error(), "403") || strings.Contains(err.Error(), "401") {
+			return nil, fmt.Errorf("finances API access denied - please run /ebay-authorize to re-authorize with Finances API scope")
+		}
+		return nil, fmt.Errorf("failed to get balance: %w", err)
 	}
 
+	// Log response for debugging (truncate if too long)
+	debugResp := string(respData)
+	if len(debugResp) > 500 {
+		debugResp = debugResp[:500]
+	}
+	log.Printf("[DEBUG] Balance API Response (first 500 chars): %s", debugResp)
+
 	var result struct {
-		AvailableFunds struct {
-			Value    string `json:"value"`
-			Currency string `json:"currency"`
-		} `json:"availableFunds"`
-		Funds []struct {
+		Transactions []struct {
 			Amount struct {
 				Value    string `json:"value"`
 				Currency string `json:"currency"`
 			} `json:"amount"`
-			AccountType string `json:"accountType"`
-		} `json:"funds"`
+			TransactionType string `json:"transactionType"`
+		} `json:"transactions"`
 	}
 
 	if err := json.Unmarshal(respData, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse balance: %w", err)
+		return nil, fmt.Errorf("failed to parse transactions: %w", err)
 	}
 
-	var available, total float64
-	fmt.Sscanf(result.AvailableFunds.Value, "%f", &available)
-
-	for _, fund := range result.Funds {
+	// Calculate balance from transactions
+	var balance float64
+	for _, tx := range result.Transactions {
 		var amount float64
-		fmt.Sscanf(fund.Amount.Value, "%f", &amount)
-		total += amount
+		fmt.Sscanf(tx.Amount.Value, "%f", &amount)
+		balance += amount // eBay API returns negative values for fees
 	}
 
 	return map[string]float64{
-		"totalBalance":    total,
-		"available":       available,
-		"pending":         total - available,
-		"salesThisMonth":  0.0, // Calculated separately if needed
-		"feesThisMonth":   0.0,
-		"netIncome":       total,
+		"available": balance,
+		"total":     balance,
 	}, nil
 }
 
 // GetPayouts retrieves recent payout transactions
 func (c *Client) GetPayouts(limit int) ([]map[string]interface{}, error) {
-	// Try to get real payouts from Finances API
-	endpoint := fmt.Sprintf("/sell/finances/v1/payout?limit=%d", limit)
+	// Get payouts with succeeded status
+	endpoint := fmt.Sprintf("/sell/finances/v1/payout?limit=%d&payoutStatus=SUCCEEDED", limit)
 	respData, err := c.makeRequest("GET", endpoint, nil)
 	if err != nil {
-		// Fall back to sample data if API not available (sandbox/permissions)
-		payouts := []map[string]interface{}{
-			{
-				"id":     "PAYOUT-12345",
-				"amount": 1250.00,
-				"status": "COMPLETED",
-				"type":   "Sales Payout",
-				"date":   "2026-01-25",
-			},
-			{
-				"id":     "PAYOUT-12344",
-				"amount": 875.50,
-				"status": "COMPLETED",
-				"type":   "Sales Payout",
-				"date":   "2026-01-18",
-			},
-			{
-				"id":     "PAYOUT-12343",
-				"amount": 432.10,
-				"status": "PENDING",
-				"type":   "Sales Payout",
-				"date":   "2026-01-28",
-			},
+		// 404 means no payout data yet or API not available
+		if strings.Contains(err.Error(), "404") {
+			return nil, fmt.Errorf("payouts API not available - try /ebay-authorize to re-authorize with Finances API scope, or check your eBay Developer keyset has Finances API enabled")
 		}
-		if len(payouts) > limit {
-			return payouts[:limit], nil
+		if strings.Contains(err.Error(), "403") || strings.Contains(err.Error(), "401") {
+			return nil, fmt.Errorf("payouts API access denied - please run /ebay-authorize to re-authorize")
 		}
-		return payouts, nil
+		return nil, fmt.Errorf("failed to get payouts: %w", err)
 	}
 
 	var result struct {
@@ -390,529 +421,7 @@ func (c *Client) GetPayouts(limit int) ([]map[string]interface{}, error) {
 
 // GetBuyerMessages retrieves buyer messages from the Post-Order API
 func (c *Client) GetBuyerMessages(limit int) ([]map[string]interface{}, error) {
-	// Try to get real messages from Post-Order Case Management API
-	endpoint := fmt.Sprintf("/post-order/v2/inquiry/search?limit=%d", limit)
-	respData, err := c.makeRequest("GET", endpoint, nil)
-	if err != nil {
-		// Fall back to sample data if API not available (sandbox/permissions)
-		messages := []map[string]interface{}{
-			{
-				"sender":  "buyer123",
-				"subject": "Question about shipping",
-				"body":    "Hi, when will this item ship?",
-				"date":    "2026-01-28 10:30 AM",
-				"orderId": "12345678",
-				"unread":  true,
-			},
-			{
-				"sender":  "buyer456",
-				"subject": "Item received - thank you!",
-				"body":    "Great product, fast shipping. Thanks!",
-				"date":    "2026-01-27 2:15 PM",
-				"orderId": "12345677",
-				"unread":  false,
-			},
-			{
-				"sender":  "buyer789",
-				"subject": "Can you combine shipping?",
-				"body":    "I'm interested in two of your items. Can you combine shipping?",
-				"date":    "2026-01-26 5:45 PM",
-				"orderId": "12345676",
-				"unread":  false,
-			},
-		}
-		if len(messages) > limit {
-			return messages[:limit], nil
-		}
-		return messages, nil
-	}
-
-	var result struct {
-		Members []struct {
-			InquiryId       string `json:"inquiryId"`
-			OrderId         string `json:"orderId"`
-			InquirySummary  string `json:"inquirySummary"`
-			InquiryDetail   string `json:"inquiryDetail"`
-			CreationDate    string `json:"creationDate"`
-			BuyerLoginName  string `json:"buyerLoginName"`
-			InquiryStatus   string `json:"inquiryStatus"`
-		} `json:"members"`
-	}
-
-	if err := json.Unmarshal(respData, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse messages: %w", err)
-	}
-
-	messages := make([]map[string]interface{}, 0, len(result.Members))
-	for _, inquiry := range result.Members {
-		unread := inquiry.InquiryStatus == "OPEN"
-		
-		messages = append(messages, map[string]interface{}{
-			"sender":  inquiry.BuyerLoginName,
-			"subject": inquiry.InquirySummary,
-			"body":    inquiry.InquiryDetail,
-			"date":    inquiry.CreationDate,
-			"orderId": inquiry.OrderId,
-			"unread":  unread,
-		})
-	}
-
-	return messages, nil
+	// Post-Order API uses different authentication (not OAuth Bearer tokens)
+	// It requires the older "IAF token" from the Trading API
+	return nil, fmt.Errorf("buyer messages not available - eBay's Post-Order API doesn't support OAuth authentication. Check messages on eBay.com or the eBay mobile app instead")
 }
-
-// ensureInventoryLocation creates a default inventory location if it doesn't exist
-func (c *Client) ensureInventoryLocation() error {
-	locationData := map[string]interface{}{
-		"location": map[string]interface{}{
-			"address": map[string]interface{}{
-				"city":        "San Jose",
-				"stateOrProvince": "CA",
-				"postalCode":  "95125",
-				"country":     "US",
-			},
-		},
-		"name": "default_location",
-		"merchantLocationStatus": "ENABLED",
-		"locationTypes": []string{"WAREHOUSE"},
-	}
-
-	endpoint := "/sell/inventory/v1/location/default_location"
-	_, err := c.makeRequest("POST", endpoint, locationData)
-	if err != nil {
-		// Ignore error if location already exists
-		return nil
-	}
-
-	return nil
-}
-
-// ensureFulfillmentPolicy creates a default fulfillment policy if needed
-func (c *Client) ensureFulfillmentPolicy() (string, error) {
-	// Try to get existing policies first
-	respData, err := c.makeRequest("GET", "/sell/account/v1/fulfillment_policy?marketplace_id=EBAY_US", nil)
-	if err == nil {
-		var result struct {
-			FulfillmentPolicies []struct {
-				FulfillmentPolicyID string `json:"fulfillmentPolicyId"`
-				Name                string `json:"name"`
-			} `json:"fulfillmentPolicies"`
-		}
-		if json.Unmarshal(respData, &result) == nil && len(result.FulfillmentPolicies) > 0 {
-			// Return the first existing policy
-			return result.FulfillmentPolicies[0].FulfillmentPolicyID, nil
-		}
-	}
-
-	// Create a new fulfillment policy with shipping options
-	policyData := map[string]interface{}{
-		"name": "Default Shipping",
-		"marketplaceId": "EBAY_US",
-		"categoryTypes": []map[string]interface{}{
-			{
-				"name": "ALL_EXCLUDING_MOTORS_VEHICLES",
-			},
-		},
-		"handlingTime": map[string]interface{}{
-			"value": 1,
-			"unit":  "DAY",
-		},
-		"shippingOptions": []map[string]interface{}{
-			{
-				"optionType": "DOMESTIC",
-				"costType":   "FLAT_RATE",
-				"shippingServices": []map[string]interface{}{
-					{
-						"shippingCarrierCode": "USPS",
-						"shippingServiceCode": "USPSPriority",
-						"shippingCost": map[string]interface{}{
-							"value":    "5.00",
-							"currency": "USD",
-						},
-						"additionalShippingCost": map[string]interface{}{
-							"value":    "2.00",
-							"currency": "USD",
-						},
-						"freeShipping": false,
-					},
-				},
-			},
-		},
-		"globalShipping": false,
-	}
-
-	policyResp, err := c.makeRequest("POST", "/sell/account/v1/fulfillment_policy", policyData)
-	if err != nil {
-		return "", fmt.Errorf("failed to create fulfillment policy: %w", err)
-	}
-
-	var policyResult struct {
-		FulfillmentPolicyID string `json:"fulfillmentPolicyId"`
-	}
-	if err := json.Unmarshal(policyResp, &policyResult); err != nil {
-		return "", fmt.Errorf("failed to parse policy response: %w", err)
-	}
-
-	return policyResult.FulfillmentPolicyID, nil
-}
-
-// ensurePaymentPolicy creates a default payment policy if needed
-func (c *Client) ensurePaymentPolicy() (string, error) {
-	// Try to get existing policies first
-	respData, err := c.makeRequest("GET", "/sell/account/v1/payment_policy?marketplace_id=EBAY_US", nil)
-	if err == nil {
-		var result struct {
-			PaymentPolicies []struct {
-				PaymentPolicyID string `json:"paymentPolicyId"`
-			} `json:"paymentPolicies"`
-		}
-		if json.Unmarshal(respData, &result) == nil && len(result.PaymentPolicies) > 0 {
-			return result.PaymentPolicies[0].PaymentPolicyID, nil
-		}
-	}
-
-	// Create new payment policy
-	policyData := map[string]interface{}{
-		"name": "Default Payment",
-		"marketplaceId": "EBAY_US",
-		"categoryTypes": []map[string]interface{}{
-			{
-				"name": "ALL_EXCLUDING_MOTORS_VEHICLES",
-			},
-		},
-		"paymentMethods": []map[string]interface{}{
-			{
-				"paymentMethodType": "PAYPAL",
-				"recipientAccountReference": map[string]interface{}{
-					"referenceId": "sandbox@example.com",
-					"referenceType": "PAYPAL_EMAIL",
-				},
-			},
-		},
-		"immediatePay": false,
-	}
-
-	policyResp, err := c.makeRequest("POST", "/sell/account/v1/payment_policy", policyData)
-	if err != nil {
-		return "", fmt.Errorf("failed to create payment policy: %w", err)
-	}
-
-	var policyResult struct {
-		PaymentPolicyID string `json:"paymentPolicyId"`
-	}
-	if err := json.Unmarshal(policyResp, &policyResult); err != nil {
-		return "", fmt.Errorf("failed to parse payment policy response: %w", err)
-	}
-
-	return policyResult.PaymentPolicyID, nil
-}
-
-// ensureReturnPolicy creates a default return policy if needed
-func (c *Client) ensureReturnPolicy() (string, error) {
-	// Try to get existing policies first
-	respData, err := c.makeRequest("GET", "/sell/account/v1/return_policy?marketplace_id=EBAY_US", nil)
-	if err == nil {
-		var result struct {
-			ReturnPolicies []struct {
-				ReturnPolicyID string `json:"returnPolicyId"`
-			} `json:"returnPolicies"`
-		}
-		if json.Unmarshal(respData, &result) == nil && len(result.ReturnPolicies) > 0 {
-			return result.ReturnPolicies[0].ReturnPolicyID, nil
-		}
-	}
-
-	// Create new return policy
-	policyData := map[string]interface{}{
-		"name": "Default Returns",
-		"marketplaceId": "EBAY_US",
-		"categoryTypes": []map[string]interface{}{
-			{
-				"name": "ALL_EXCLUDING_MOTORS_VEHICLES",
-			},
-		},
-		"returnsAccepted": true,
-		"returnPeriod": map[string]interface{}{
-			"value": 30,
-			"unit":  "DAY",
-		},
-		"returnMethod": "REPLACEMENT",
-		"returnShippingCostPayer": "BUYER",
-	}
-
-	policyResp, err := c.makeRequest("POST", "/sell/account/v1/return_policy", policyData)
-	if err != nil {
-		return "", fmt.Errorf("failed to create return policy: %w", err)
-	}
-
-	var policyResult struct {
-		ReturnPolicyID string `json:"returnPolicyId"`
-	}
-	if err := json.Unmarshal(policyResp, &policyResult); err != nil {
-		return "", fmt.Errorf("failed to parse return policy response: %w", err)
-	}
-
-	return policyResult.ReturnPolicyID, nil
-}
-
-// PublishListing creates and publishes a complete eBay listing with optional Best Offer
-func (c *Client) PublishListing(title, description string, price float64, enableOffers bool, minOffer float64) (string, string, error) {
-	// Ensure default location exists
-	c.ensureInventoryLocation()
-
-	// Ensure policies exist and get their IDs
-	fulfillmentPolicyID, err := c.ensureFulfillmentPolicy()
-	if err != nil {
-		return "", "", fmt.Errorf("failed to setup fulfillment policy: %w", err)
-	}
-
-	paymentPolicyID, err := c.ensurePaymentPolicy()
-	if err != nil {
-		return "", "", fmt.Errorf("failed to setup payment policy: %w", err)
-	}
-
-	returnPolicyID, err := c.ensureReturnPolicy()
-	if err != nil {
-		return "", "", fmt.Errorf("failed to setup return policy: %w", err)
-	}
-
-	// Generate SKU
-	sku := fmt.Sprintf("ITEM-%d", time.Now().Unix())
-
-	// Step 1: Create inventory item
-	inventoryData := map[string]interface{}{
-		"availability": map[string]interface{}{
-			"shipToLocationAvailability": map[string]interface{}{
-				"quantity": 1,
-			},
-		},
-		"condition": "NEW",
-		"product": map[string]interface{}{
-			"title":       title,
-			"description": description,
-			"aspects": map[string][]string{
-				"Brand":     {"Generic"},
-				"Type":      {"Standard"},
-				"Condition": {"New"},
-			},
-			"imageUrls": []string{
-				"https://via.placeholder.com/500x500.png?text=Product+Image",
-			},
-		},
-		"packageWeightAndSize": map[string]interface{}{
-			"dimensions": map[string]interface{}{
-				"height": 5.0,
-				"length": 10.0,
-				"width":  5.0,
-				"unit":   "INCH",
-			},
-			"weight": map[string]interface{}{
-				"value": 1.0,
-				"unit":  "POUND",
-			},
-		},
-	}
-
-	endpoint := fmt.Sprintf("/sell/inventory/v1/inventory_item/%s", sku)
-	respData, err := c.makeRequest("PUT", endpoint, inventoryData)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to create inventory item: %w", err)
-	}
-	_ = respData // Unused but needed for := syntax
-
-	// Step 2: Create offer (listing) with optional Best Offer
-	offerData := map[string]interface{}{
-		"sku":               sku,
-		"marketplaceId":     "EBAY_US",
-		"format":            "FIXED_PRICE",
-		"availableQuantity": 1,
-		"categoryId":        "88433", // Jewelry & Watches > Fashion Jewelry (safe category for testing)
-		"listingDescription": description,
-		"merchantLocationKey": "default_location",
-		"storeCategoryNames": []string{},
-		"includeCatalogProductDetails": false,
-		"listingPolicies": map[string]interface{}{
-			"fulfillmentPolicyId": fulfillmentPolicyID,
-			"paymentPolicyId":     paymentPolicyID,
-			"returnPolicyId":      returnPolicyID,
-		},
-		"pricingSummary": map[string]interface{}{
-			"price": map[string]interface{}{
-				"currency": "USD",
-				"value":    fmt.Sprintf("%.2f", price),
-			},
-		},
-		"tax": map[string]interface{}{
-			"applyTax": false,
-		},
-	}
-
-	// Add shipping cost specifications (inline, no policy required)
-	offerData["shippingCostOverrides"] = []map[string]interface{}{
-		{
-			"priority": 1,
-			"shippingServiceType": "DOMESTIC",
-			"shippingCost": map[string]interface{}{
-				"currency": "USD",
-				"value": "5.00",
-			},
-			"additionalShippingCost": map[string]interface{}{
-				"currency": "USD",
-				"value": "2.00",
-			},
-		},
-	}
-
-	// Add Best Offer if enabled
-	if enableOffers {
-		bestOfferTerms := map[string]interface{}{
-			"bestOfferEnabled": true,
-		}
-		if minOffer > 0 {
-			bestOfferTerms["autoAcceptPrice"] = map[string]interface{}{
-				"currency": "USD",
-				"value":    fmt.Sprintf("%.2f", minOffer),
-			}
-		}
-		offerData["bestOfferTerms"] = bestOfferTerms
-	}
-
-	// Create the offer
-	offerResp, err := c.makeRequest("POST", "/sell/inventory/v1/offer", offerData)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to create offer: %w", err)
-	}
-
-	// Extract offer ID from response
-	var offerResult map[string]interface{}
-	if err := json.Unmarshal(offerResp, &offerResult); err != nil {
-		return "", "", fmt.Errorf("failed to parse offer response: %w", err)
-	}
-
-	offerID, ok := offerResult["offerId"].(string)
-	if !ok {
-		return "", "", fmt.Errorf("offer ID not found in response")
-	}
-
-	// Step 3: Publish the offer
-	publishEndpoint := fmt.Sprintf("/sell/inventory/v1/offer/%s/publish", offerID)
-	publishResp, err := c.makeRequest("POST", publishEndpoint, nil)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to publish listing: %w", err)
-	}
-
-	// Extract listing ID from publish response
-	var publishResult map[string]interface{}
-	if err := json.Unmarshal(publishResp, &publishResult); err != nil {
-		return sku, "", nil // Return SKU even if we can't parse listing ID
-	}
-
-	listingID := ""
-	if lid, ok := publishResult["listingId"].(string); ok {
-		listingID = lid
-	}
-
-	return sku, listingID, nil
-}
-
-// GetInventoryItems retrieves a list of inventory items
-func (c *Client) GetInventoryItems(limit int) ([]map[string]interface{}, error) {
-	endpoint := fmt.Sprintf("/sell/inventory/v1/inventory_item?limit=%d", limit)
-	respData, err := c.makeRequest("GET", endpoint, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get inventory items: %w", err)
-	}
-
-	var result struct {
-		InventoryItems []struct {
-			SKU     string `json:"sku"`
-			Product struct {
-				Title string `json:"title"`
-			} `json:"product"`
-		} `json:"inventoryItems"`
-	}
-
-	if err := json.Unmarshal(respData, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse inventory response: %w", err)
-	}
-
-	// Get offers for each inventory item to get prices and listing IDs
-	items := make([]map[string]interface{}, 0)
-	for _, item := range result.InventoryItems {
-		// Get offers for this SKU
-		offerEndpoint := fmt.Sprintf("/sell/inventory/v1/offer?sku=%s", item.SKU)
-		offerResp, err := c.makeRequest("GET", offerEndpoint, nil)
-		
-		itemData := map[string]interface{}{
-			"sku":   item.SKU,
-			"title": item.Product.Title,
-			"price": 0.0,
-			"bestOfferEnabled": false,
-			"listingId": "",
-		}
-
-		if err == nil {
-			var offerResult struct {
-				Offers []struct {
-					PricingSummary struct {
-						Price struct {
-							Value string `json:"value"`
-						} `json:"price"`
-					} `json:"pricingSummary"`
-					BestOfferTerms struct {
-						BestOfferEnabled bool `json:"bestOfferEnabled"`
-					} `json:"bestOfferTerms"`
-					ListingId string `json:"listingId"`
-				} `json:"offers"`
-			}
-			
-			if json.Unmarshal(offerResp, &offerResult) == nil && len(offerResult.Offers) > 0 {
-				offer := offerResult.Offers[0]
-				var price float64
-				fmt.Sscanf(offer.PricingSummary.Price.Value, "%f", &price)
-				itemData["price"] = price
-				itemData["bestOfferEnabled"] = offer.BestOfferTerms.BestOfferEnabled
-				itemData["listingId"] = offer.ListingId
-			}
-		}
-
-		items = append(items, itemData)
-	}
-
-	return items, nil
-}
-
-// DeleteInventoryItem deletes an inventory item and unpublishes any associated listings
-func (c *Client) DeleteInventoryItem(sku string) error {
-	// First, get and delete any associated offers
-	offerEndpoint := fmt.Sprintf("/sell/inventory/v1/offer?sku=%s", sku)
-	offerResp, err := c.makeRequest("GET", offerEndpoint, nil)
-	
-	if err == nil {
-		var offerResult struct {
-			Offers []struct {
-				OfferID string `json:"offerId"`
-			} `json:"offers"`
-		}
-		
-		if json.Unmarshal(offerResp, &offerResult) == nil {
-			for _, offer := range offerResult.Offers {
-				// Withdraw (unpublish) and delete each offer
-				withdrawEndpoint := fmt.Sprintf("/sell/inventory/v1/offer/%s/withdraw", offer.OfferID)
-				c.makeRequest("POST", withdrawEndpoint, nil) // Ignore errors, may already be withdrawn
-				
-				deleteOfferEndpoint := fmt.Sprintf("/sell/inventory/v1/offer/%s", offer.OfferID)
-				c.makeRequest("DELETE", deleteOfferEndpoint, nil) // Ignore errors
-			}
-		}
-	}
-
-	// Delete the inventory item
-	endpoint := fmt.Sprintf("/sell/inventory/v1/inventory_item/%s", sku)
-	_, err = c.makeRequest("DELETE", endpoint, nil)
-	if err != nil {
-		return fmt.Errorf("failed to delete inventory item: %w", err)
-	}
-
-	return nil
-}
-
