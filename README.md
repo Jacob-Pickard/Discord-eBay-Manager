@@ -27,11 +27,14 @@ Manage your eBay seller account directly from Discord! View orders, respond to o
 - **Decline Offers** - Politely decline with optional messages
 - **Real-time Notifications** - Get notified when offers come in
 
-### 🔔 Webhook Notifications (Production)
-- **New Orders** - Instant notification when items sell
-- **Best Offers** - Alert when buyers submit offers
-- **Account Events** - Stay updated on account changes
-- **SHA-256 Verification** - Secure webhook challenge validation
+### 🔔 Webhook Notifications (Infrastructure Ready)
+- **Webhook Server** - Running on port 8081 behind Nginx reverse proxy
+- **Endpoint Accessible** - Responds to internal and external requests
+- **Network Complete** - Firewall and port forwarding configured
+- **Health Check** - `https://yourdomain.com/webhook/health` returns OK
+- **SHA-256 Verification** - Challenge validation implemented
+- **Known Issue** - eBay Notification API subscription creation failures (under investigation)
+- **Next Steps** - Troubleshoot eBay subscription API endpoint and response format
 
 ### 🔐 Security & Authentication
 - **OAuth 2.0 Flow** - Fully automatic eBay authorization
@@ -132,23 +135,57 @@ Deploy to a Linux server for 24/7 operation and webhook support.
 ```powershell
 # 1. Configure your server details
 cp deploy-config.env.example deploy-config.env
-# Edit deploy-config.env
+# Edit deploy-config.env with your server IP, user, and domain
 
-# 2. Deploy
+# 2. Deploy to server
 .\scripts\deploy.ps1
 
-# 3. Watch logs (optional)
+# 3. Deploy and watch logs in real-time
 .\scripts\deploy.ps1 -Watch
+
+# 4. Update .env on server without rebuilding
+.\scripts\deploy.ps1 -SkipBuild
 ```
 
-### Requirements
+### Server Requirements
 
 - **OS:** Ubuntu 22.04+ (or any Linux with systemd)
 - **Domain:** Public domain with HTTPS (Let's Encrypt recommended)
-- **Port:** 8081 open internally for webhook server
-- **Reverse Proxy:** Nginx (configuration provided)
+- **SSL:** Valid SSL certificate (Let's Encrypt or commercial)
+- **Reverse Proxy:** Nginx configured to proxy `/webhook/` to port 8081
+- **Services:** systemd for process management
 
-**📚 Deployment guide:** See [docs/DEPLOYMENT_SCRIPTS.md](docs/DEPLOYMENT_SCRIPTS.md)
+### Network Requirements
+
+**Critical:** For webhooks to work externally, you need:
+
+1. **Server Firewall (UFW):**
+   ```bash
+   sudo ufw allow 22/tcp   # SSH
+   sudo ufw allow 80/tcp   # HTTP
+   sudo ufw allow 443/tcp  # HTTPS
+   sudo ufw enable
+   ```
+
+2. **Router Port Forwarding:**
+   - Forward port 80 (HTTP) → your server's local IP (port 80)
+   - Forward port 443 (HTTPS) → your server's local IP (port 443)
+   - Access your router admin panel (usually 192.168.0.1 or 192.168.1.1)
+   - Find "Port Forwarding" or "Virtual Server" settings
+
+3. **DNS Configuration:**
+   - Point your domain's A record to your public IP address
+   - Verify with: `nslookup yourdomain.com 8.8.8.8`
+
+### Deployment Scripts
+
+| Script | Purpose | Usage |
+|--------|---------|-------|
+| `deploy.ps1` | Build & deploy to server | `deploy.ps1 [-Watch] [-SkipBuild]` |
+| `deploy-watch.ps1` | Deploy with live logs | `deploy-watch.ps1` |
+| `deploy-config.ps1` | Update .env on server | `deploy-config.ps1` |
+
+**📚 Full deployment guide:** See [GETTING_STARTED.md](GETTING_STARTED.md#production-deployment)
 
 ---
 
@@ -173,9 +210,12 @@ ebay-manager-bot/
 │   └── webhook-domain.conf.example # Nginx template
 │
 ├── scripts/
-│   ├── deploy.ps1              # Main deployment script
-│   ├── deploy-watch.ps1        # Deploy with log viewing
-│   └── deploy-config.ps1       # Update .env on server
+│   ├── deploy.ps1              # Main deployment (-Watch, -SkipBuild)
+│   ├── deploy-watch.ps1        # Deploy with live logs
+│   ├── deploy-config.ps1       # Update .env on server
+│   ├── check-firewall.sh       # Diagnose firewall issues
+│   ├── fix-firewall.sh         # Auto-configure UFW firewall
+│   └── [other deployment utilities...]
 │
 ├── docs/
 │   ├── DEPLOYMENT_SCRIPTS.md   # Deployment guide
@@ -258,11 +298,13 @@ go test ./...
 go run tools/check_config.go
 ```
 
-### Tools
+### Tools & Utilities
 
 - `tools/check_config.go` - Validate environment configuration
 - `tools/test_webhook_subscription.go` - Test eBay webhook subscriptions
 - `tools/Test-Webhook-Simple.ps1` - Simple webhook endpoint tests
+- `scripts/check-firewall.sh` - Diagnose server firewall configuration
+- `scripts/fix-firewall.sh` - Automatically configure UFW firewall rules
 
 ---
 
@@ -273,6 +315,7 @@ go run tools/check_config.go
 **Bot won't start**
 - Check `.env` file exists and contains valid credentials
 - Verify Go dependencies are installed: `go mod download`
+- Review logs: `journalctl -u ebay-bot -f` (on server)
 
 **Commands don't appear**
 - Wait 10-15 seconds after bot starts
@@ -282,11 +325,48 @@ go run tools/check_config.go
 **OAuth fails**
 - Verify `EBAY_REDIRECT_URI` matches your eBay RuName exactly
 - Check you're using correct environment (SANDBOX vs PRODUCTION)
+- Ensure webhook server is accessible externally
 
-**Webhook errors**
-- Test endpoint accessibility: `curl https://yourdomain.com/webhook/health`
-- Verify SSL certificate is valid
-- Check webhook verify token is 32-80 characters
+**Webhooks not working externally**
+
+1. **Check firewall on server:**
+   ```bash
+   ssh user@server "sudo ufw status verbose"
+   # Ensure ports 80 and 443 are allowed
+   ```
+
+2. **Check router port forwarding:**
+   ```powershell
+   # Test from external network (use phone data, not WiFi)
+   Test-NetConnection -ComputerName your-public-ip -Port 443
+   # Should show TcpTestSucceeded : True
+   ```
+
+3. **Verify endpoint responds:**
+   ```bash
+   curl -k https://yourdomain.com/webhook/health
+   # Should return: OK
+   ```
+
+4. **Check DNS resolution:**
+   ```powershell
+   nslookup yourdomain.com 8.8.8.8
+   # Should show your public IP address
+   ```
+
+**eBay webhook subscription creation fails**
+- Infrastructure (server, firewall, ports) is working correctly
+- Issue is with eBay Notification API rejecting subscription requests
+- Check logs: `ssh user@server "journalctl -u ebay-bot -n 50"`
+- Verify OAuth scopes include `sell.notification`
+- Review eBay Developer Console for API errors
+- See: [docs/WEBHOOK_SETUP.md](docs/WEBHOOK_SETUP.md) for detailed troubleshooting
+
+**Deployment script fails**
+- Verify `deploy-config.env` has correct server details
+- Test SSH connection manually: `ssh user@server`
+- Check Go is installed: `go version`
+- Ensure you have permissions on the server
 
 **📚 More help:** See [GETTING_STARTED.md](GETTING_STARTED.md#troubleshooting)
 
@@ -299,17 +379,22 @@ go run tools/check_config.go
 | OAuth 2.0 | Token exchange & refresh | ✅ Working |
 | Fulfillment API | Order management | ✅ Working |
 | Inventory API | Offer management | ✅ Working |
-| Notification API | Webhook subscriptions | ✅ Working |
+| Notification API | Webhook subscriptions | ⚙️ Infrastructure ready, finalizing API integration |
 | Browse API | Product images | ✅ Working |
 
 ---
 
-## 🚦 Status
+## 🚦 Current Status
 
-- ✅ **Production Ready** - Fully tested and deployed
-- ✅ **Active Development** - Regular updates and improvements
+- ✅ **Production Deployed** - Running 24/7 on Ubuntu 22.04 server
+- ⚙️ **Webhooks** - Endpoint fully accessible, working on eBay API integration
+- ✅ **OAuth Working** - Automatic token refresh every 90 minutes
+- ✅ **SSL Secured** - Let's Encrypt HTTPS with auto-renewal
+- ✅ **Systemd Service** - Auto-starts on server reboot
+- ✅ **Nginx Reverse Proxy** - Handles TLS termination and routing
+- ✅ **Firewall Configured** - UFW with ports 80/443 open, port forwarding complete
 - ✅ **Well Documented** - Comprehensive guides and examples
-- ✅ **Secure** - Follows security best practices
+- ✅ **Security Hardened** - Environment variables, gitignore, OAuth 2.0
 
 ---
 
