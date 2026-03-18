@@ -199,7 +199,8 @@ if ($ruName -eq "") {
         Write-Host "   /ebay-code code:<paste_code_here>" -ForegroundColor Cyan
         Write-Host ""
         Write-Host "5. Subscribe to webhooks:" -ForegroundColor White
-        Write-Host "   /webhook-subscribe url:https://jacob.it.com/webhook/ebay/notification" -ForegroundColor Cyan
+        Write-Host "   /webhook-subscribe url:https://yourdomain.com/webhook/ebay/notification" -ForegroundColor Cyan
+        Write-Host "   (Replace yourdomain.com with your actual domain)" -ForegroundColor Gray
         Write-Host ""
         Write-Host "6. Test with:" -ForegroundColor White
         Write-Host "   /ebay-status" -ForegroundColor Cyan

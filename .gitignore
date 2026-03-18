@@ -35,12 +35,21 @@ config/.env.production.unix
 config/.env.sandbox.backup
 config/.env.*.local
 
+# Deployment configuration with server details
+deploy-config.env
+
 # Note: config/.env.example and config/.env.production.template ARE tracked (templates only)
 
 # Sensitive configuration files
 config.json
 secrets.json
 credentials.json
+
+# User-specific config files (keep .example versions)
+config/ebay-bot.service
+config/*.conf
+!config/*.example
+!config/nginx-webhook-example.conf
 
 # OAuth tokens and API keys
 tokens/

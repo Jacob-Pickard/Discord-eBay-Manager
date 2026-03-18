@@ -10,7 +10,7 @@ After making code changes, just run:
 
 This will:
 - Build Linux binary
-- Upload to jacob.it.com
+- Upload to your-server
 - Restart bot service
 - Show status and logs
 
@@ -102,7 +102,7 @@ Interactive wizard that:
 # 3. Authorize in Discord:
 #    /ebay-authorize
 #    /ebay-code code:<your_code>
-#    /webhook-subscribe url:https://jacob.it.com/webhook/ebay/notification
+#    /webhook-subscribe url:https://yourdomain.com/webhook/ebay/notification
 ```
 
 ### Updating Environment Variables
@@ -118,7 +118,7 @@ Interactive wizard that:
 .\deploy-watch.ps1
 
 # Option 2: SSH directly
-ssh jacob@192.168.0.12 "tail -f /home/jacob/ebay-bot/bot-error.log"
+ssh user@your-server "tail -f /path/to/ebay-bot/bot-error.log"
 ```
 
 ---
@@ -127,32 +127,32 @@ ssh jacob@192.168.0.12 "tail -f /home/jacob/ebay-bot/bot-error.log"
 
 ### Check Bot Status
 ```powershell
-ssh jacob@192.168.0.12 "sudo systemctl status ebay-bot"
+ssh jacob@192.168.0.199 "sudo systemctl status ebay-bot"
 ```
 
 ### Restart Bot Manually
 ```powershell
-ssh jacob@192.168.0.12 "sudo systemctl restart ebay-bot"
+ssh user@your-server "sudo systemctl restart ebay-bot"
 ```
 
 ### Stop Bot
 ```powershell
-ssh jacob@192.168.0.12 "sudo systemctl stop ebay-bot"
+ssh user@your-server "sudo systemctl stop ebay-bot"
 ```
 
 ### Start Bot
 ```powershell
-ssh jacob@192.168.0.12 "sudo systemctl start ebay-bot"
+ssh user@your-server "sudo systemctl start ebay-bot"
 ```
 
 ### View Logs (Last 50 Lines)
 ```powershell
-ssh jacob@192.168.0.12 "tail -50 /home/jacob/ebay-bot/bot-error.log"
+ssh jacob@192.168.0.199 "tail -50 /home/jacob/ebay-bot/bot-error.log"
 ```
 
 ### Test Webhook
 ```powershell
-Invoke-RestMethod -Uri "https://jacob.it.com/webhook/health"
+Invoke-RestMethod -Uri "https://yourdomain.com/webhook/health"
 ```
 
 ---
@@ -165,7 +165,7 @@ Invoke-RestMethod -Uri "https://jacob.it.com/webhook/health"
 - Production config: `.env.production` (created by setup-production.ps1)
 - Deployment scripts: `deploy*.ps1`
 
-### On Server (jacob.it.com)
+### On Server (your-domain)
 - Bot directory: `/home/jacob/ebay-bot/`
 - Executable: `/home/jacob/ebay-bot/ebaymanager-bot-linux`
 - Configuration: `/home/jacob/ebay-bot/.env`
@@ -177,24 +177,24 @@ Invoke-RestMethod -Uri "https://jacob.it.com/webhook/health"
 ## Troubleshooting
 
 ### Deployment fails with password prompt
-**Solution:** Make sure you're entering your SSH password for jacob@192.168.0.12
+**Solution:** Make sure you're entering your SSH password for user@your-server
 
 ### Bot won't start after deployment
 ```powershell
 # Check logs
-ssh jacob@192.168.0.12 "tail -50 /home/jacob/ebay-bot/bot-error.log"
+ssh jacob@192.168.0.199 "tail -50 /home/jacob/ebay-bot/bot-error.log"
 
 # Check service status
-ssh jacob@192.168.0.12 "sudo systemctl status ebay-bot"
+ssh jacob@192.168.0.199 "sudo systemctl status ebay-bot"
 ```
 
 ### Webhook returns 502
 ```powershell
 # Verify bot is running
-ssh jacob@192.168.0.12 "systemctl is-active ebay-bot"
+ssh jacob@192.168.0.199 "systemctl is-active ebay-bot"
 
 # Check if listening on port
-ssh jacob@192.168.0.12 "ss -tlnp | grep 8081"
+ssh jacob@192.168.0.199 "ss -tlnp | grep 8081"
 ```
 
 ### Changes not appearing

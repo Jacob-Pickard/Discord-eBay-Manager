@@ -3,7 +3,7 @@
 ## Your Setup
 - **Domain:** jacob.it.com
 - **Reverse Proxy:** Nginx
-- **Bot Server:** 192.168.0.12:8081
+- **Bot Server:** 192.168.0.199:8081
 - **Webhook Endpoints:** 
   - https://jacob.it.com/webhook/ebay/notification (main endpoint)
   - https://jacob.it.com/webhook/ebay/challenge (verification)
@@ -30,7 +30,7 @@ server {
     
     # eBay Bot Webhook Endpoints - ADD THIS
     location /webhook/ {
-        proxy_pass http://192.168.0.12:8081;
+        proxy_pass http://192.168.0.199:8081;
         proxy_http_version 1.1;
         
         # Forward original headers
@@ -164,7 +164,7 @@ NOTIFICATION_CHANNEL_ID=your_discord_channel_id
 
 ```bash
 # SSH into the server running the bot
-curl http://192.168.0.12:8081/health
+curl http://192.168.0.199:8081/health
 
 # Should respond with bot status
 ```
@@ -191,12 +191,12 @@ Invoke-RestMethod -Uri "https://jacob.it.com/webhook/health
 ## Common Issues & Solutions
 
 ### Issue: "502 Bad Gateway"
-**Cause:** Nginx can't reach the bot at 192.168.0.12:8081
+**Cause:** Nginx can't reach the bot at 192.168.0.199:8081
 
 **Fix:**
 ```bash
 # 1. Check if bot is running
-curl http://192.168.0.12:8081
+curl http://192.168.0.199:8081
 
 # 2. Check firewall
 sudo ufw status
@@ -251,7 +251,7 @@ Before proceeding to production:
 - [ ] Nginx configuration added to jacob.it.com config file
 - [ ] `sudo nginx -t` passes with no errors
 - [ ] Nginx reloaded: `sudo systemctl reload nginx`
-- [ ] Bot is running on 192.168.0.12:8081
+- [ ] Bot is running on 192.168.0.199:8081
 - [ ] `https://jacob.it.com/webhook/health` is accessible from Windows
 - [ ] Firewall allows traffic between Nginx and bot
 - [ ] SSL certificate works (should - same as your site)

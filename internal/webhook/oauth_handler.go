@@ -167,6 +167,13 @@ func processOAuthToken(state, code string) {
 		return
 	}
 
+	// Persist tokens to .env so they survive restarts
+	if err := ebayClient.SaveTokensToEnv(); err != nil {
+		log.Printf("⚠️ Failed to save tokens to .env: %v", err)
+	} else {
+		log.Println("✅ Tokens saved to .env")
+	}
+
 	// Success! Notify Discord
 	log.Printf("✅ OAuth tokens obtained successfully for state: %s", state)
 	callback.Discord.FollowupMessageCreate(callback.Interaction, true, &discordgo.WebhookParams{

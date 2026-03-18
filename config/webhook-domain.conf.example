@@ -1,0 +1,52 @@
+# Nginx Configuration for eBay Bot Webhook
+# Copy this file to /etc/nginx/sites-available/yourdomain.com
+# Then create a symlink: ln -s /etc/nginx/sites-available/yourdomain.com /etc/nginx/sites-enabled/
+# Replace yourdomain.com with your actual domain throughout this file
+
+server {
+    server_name yourdomain.com;
+
+    # If you have a website, configure your root and index here
+    # root /var/www/yourdomain.com/html;
+    # index index.html;
+
+    # location / {
+    #     try_files $uri $uri/ /index.html;
+    # }
+
+    # eBay Bot Webhook Endpoints
+    location /webhook/ {
+        proxy_pass http://127.0.0.1:8081;
+        proxy_http_version 1.1;
+        
+        # Forward original headers
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # Timeouts
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+        
+        # Allow large payloads from eBay
+        client_max_body_size 10M;
+    }
+
+    listen 443 ssl; # managed by Certbot
+    ssl_certificate /etc/letsencrypt/live/yourdomain.com/fullchain.pem; # managed by Certbot
+    ssl_certificate_key /etc/letsencrypt/live/yourdomain.com/privkey.pem; # managed by Certbot
+    include /etc/letsencrypt/options-ssl-nginx.conf; # managed by Certbot
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem; # managed by Certbot
+}
+
+server {
+    if ($host = yourdomain.com) {
+        return 301 https://$host$request_uri;
+    } # managed by Certbot
+
+    listen 80;
+    server_name yourdomain.com;
+    return 404; # managed by Certbot
+}

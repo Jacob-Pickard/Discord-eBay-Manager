@@ -16,13 +16,15 @@ type Config struct {
 
 // EbayConfig holds eBay API configuration
 type EbayConfig struct {
-	AppID        string
-	CertID       string
-	DevID        string
-	RedirectURI  string
-	AccessToken  string
-	RefreshToken string
-	Environment  string // PRODUCTION or SANDBOX
+	AppID              string
+	CertID             string
+	DevID              string
+	RedirectURI        string
+	AccessToken        string
+	RefreshToken       string
+	Environment        string // PRODUCTION or SANDBOX
+	WebhookVerifyToken string // must be 32-80 chars for eBay Notification API
+	SellerUsername     string // optional override; auto-detected via Identity API if blank
 }
 
 // Load reads configuration from environment variables
@@ -55,13 +57,15 @@ func Load() (*Config, error) {
 	return &Config{
 		DiscordToken: discordToken,
 		EbayConfig: EbayConfig{
-			AppID:        ebayAppID,
-			CertID:       os.Getenv("EBAY_CERT_ID"),
-			DevID:        os.Getenv("EBAY_DEV_ID"),
-			RedirectURI:  os.Getenv("EBAY_REDIRECT_URI"),
-			AccessToken:  os.Getenv("EBAY_ACCESS_TOKEN"),
-			RefreshToken: os.Getenv("EBAY_REFRESH_TOKEN"),
-			Environment:  ebayEnvironment,
+			AppID:              ebayAppID,
+			CertID:             os.Getenv("EBAY_CERT_ID"),
+			DevID:              os.Getenv("EBAY_DEV_ID"),
+			RedirectURI:        os.Getenv("EBAY_REDIRECT_URI"),
+			AccessToken:        os.Getenv("EBAY_ACCESS_TOKEN"),
+			RefreshToken:       os.Getenv("EBAY_REFRESH_TOKEN"),
+			Environment:        ebayEnvironment,
+			WebhookVerifyToken: webhookVerifyToken,
+			SellerUsername:     os.Getenv("EBAY_SELLER_USERNAME"),
 		},
 		WebhookPort:           webhookPort,
 		WebhookVerifyToken:    webhookVerifyToken,

@@ -66,6 +66,20 @@ type Address struct {
 	Country    string `json:"country"`
 }
 
+// Listing represents an active eBay inventory listing
+type Listing struct {
+	SKU        string
+	Title      string
+	Price      float64
+	Currency   string
+	Shipping   string
+	Quantity   int
+	Condition  string
+	ImageURL   string
+	ListingURL string
+	ListingID  string
+}
+
 // Offer represents a buyer offer
 type Offer struct {
 	OfferID       string    `json:"offerId"`

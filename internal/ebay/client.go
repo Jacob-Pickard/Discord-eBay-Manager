@@ -3,10 +3,12 @@
 import (
 	"bytes"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -48,29 +50,65 @@ func NewClient(cfg config.EbayConfig) *Client {
 	}
 }
 
+// SaveTokensToEnv persists the current access and refresh tokens to the .env file
+func (c *Client) SaveTokensToEnv() error {
+	envPath := ".env"
+	data, err := os.ReadFile(envPath)
+	if err != nil {
+		return fmt.Errorf("failed to read .env file: %w", err)
+	}
+
+	lines := strings.Split(string(data), "\n")
+	for i, line := range lines {
+		if strings.HasPrefix(line, "EBAY_ACCESS_TOKEN=") {
+			lines[i] = "EBAY_ACCESS_TOKEN=" + c.config.AccessToken
+		} else if strings.HasPrefix(line, "EBAY_REFRESH_TOKEN=") && c.config.RefreshToken != "" {
+			lines[i] = "EBAY_REFRESH_TOKEN=" + c.config.RefreshToken
+		}
+	}
+
+	if err := os.WriteFile(envPath, []byte(strings.Join(lines, "\n")), 0644); err != nil {
+		return fmt.Errorf("failed to write .env file: %w", err)
+	}
+
+	log.Println("✅ Tokens persisted to .env file")
+	return nil
+}
+
 // CheckConnection verifies the eBay API connection
 func (c *Client) CheckConnection() string {
 	if c.config.AccessToken == "" {
-		return "âŒ No access token configured. You need to authenticate with eBay first."
+		return "âŒ **Not authorized**\n\nNo access token found. Run `/ebay-authorize` to connect your eBay account."
 	}
 
-	// Try a simple API call to verify connection
-	// TODO: Implement actual API call
-	return fmt.Sprintf("âœ… Connected to eBay API (%s mode)\nðŸ”‘ Access token: %s...",
+	// Test with a lightweight API call
+	_, err := c.makeRequest("GET", "/sell/account/v1/privilege", nil)
+	if err != nil {
+		return fmt.Sprintf("âš ï¸ **Token configured but API test failed**\n\nEnvironment: %s\nError: %v\n\nâš¡ Try re-authorizing with `/ebay-authorize`",
+			c.config.Environment, err)
+	}
+
+	return fmt.Sprintf("âœ… **Connected to eBay API**\n\nEnvironment: `%s`\nToken: `%s...` âœ…\n\n💡 Use `/ebay-scopes` to see your token's permissions.",
 		c.config.Environment,
 		c.config.AccessToken[:10])
 }
 
-// GetTokenScopes returns the OAuth scopes that would be requested for a new token
-func (c *Client) GetTokenScopes() []string {
-	// These are the scopes we configure in oauth.go
-	return []string{
-		"api_scope",
-		"sell.inventory",
-		"sell.fulfillment",
-		"sell.account",
-		"sell.finances",
+// GetTokenScopes returns the OAuth scopes configured for this application
+func (c *Client) GetTokenScopes() map[string]interface{} {
+	// Return scope info with token status
+	result := make(map[string]interface{})
+	result["hasToken"] = c.config.AccessToken != ""
+	result["environment"] = c.config.Environment
+	result["requestedScopes"] = []string{
+		"https://api.ebay.com/oauth/api_scope",
+		"https://api.ebay.com/oauth/api_scope/sell.inventory",
+		"https://api.ebay.com/oauth/api_scope/sell.fulfillment",
+		"https://api.ebay.com/oauth/api_scope/sell.account",
+		"https://api.ebay.com/oauth/api_scope/sell.finances",
+		"https://api.ebay.com/oauth/api_scope/commerce.identity.readonly",
+		"https://api.ebay.com/oauth/api_scope/commerce.notification.subscription",
 	}
+	return result
 }
 
 // makeRequest is a helper to make authenticated requests to eBay API
@@ -85,6 +123,10 @@ func (c *Client) makeRequest(method, endpoint string, body interface{}) ([]byte,
 	}
 
 	fullURL := c.baseURL + endpoint
+	// Finances API uses apiz.ebay.com instead of api.ebay.com
+	if strings.Contains(endpoint, "/sell/finances/") {
+		fullURL = strings.Replace(fullURL, "api.ebay.com", "apiz.ebay.com", 1)
+	}
 	req, err := http.NewRequest(method, fullURL, reqBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
@@ -96,6 +138,14 @@ func (c *Client) makeRequest(method, endpoint string, body interface{}) ([]byte,
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Language", "en-US")
 	req.Header.Set("Accept-Language", "en-US")
+
+	// Log all outbound requests
+	log.Printf("[API] %s %s", method, fullURL)
+
+	// Browse and Commerce APIs require a marketplace ID
+	if strings.Contains(endpoint, "/buy/") || strings.Contains(endpoint, "/commerce/") {
+		req.Header.Set("X-EBAY-C-MARKETPLACE-ID", "EBAY_US")
+	}
 
 	// Log request details for Finances API debugging
 	if strings.Contains(endpoint, "/finances/") {
@@ -114,15 +164,16 @@ func (c *Client) makeRequest(method, endpoint string, body interface{}) ([]byte,
 		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
-	// Enhanced logging for Finances API errors
+	// Enhanced logging for all API errors
 	if resp.StatusCode >= 400 {
+		log.Printf("[API ERROR] %s %s => HTTP %d: %s", method, fullURL, resp.StatusCode, string(respBody))
 		if strings.Contains(endpoint, "/finances/") {
-			log.Printf("[DEBUG] Finances API Error - Status: %d", resp.StatusCode)
-			log.Printf("[DEBUG] Response Headers: %v", resp.Header)
-			log.Printf("[DEBUG] Response Body: %s", string(respBody))
+			log.Printf("[DEBUG] Finances Response Headers: %v", resp.Header)
 		}
 		return nil, fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
 	}
+
+	log.Printf("[API] %s %s => HTTP %d (%d bytes)", method, fullURL, resp.StatusCode, len(respBody))
 
 	return respBody, nil
 }
@@ -247,29 +298,205 @@ func (c *Client) GetOffers() ([]Offer, error) {
 		return nil, fmt.Errorf("no access token available")
 	}
 
-	// Note: eBay's Sell APIs don't have a direct "buyer offers" endpoint
-	// Best offers are integrated into the Inventory API per listing
-	// For webhooks, you'll get OFFER notifications
-	// For now, return empty list - offers will be handled via webhooks
+	// Try to fetch offers from Negotiation API
+	// Note: eBay's Negotiation API may require offer IDs from notifications
+	// If this fails, advise users to use webhook notifications
+	endpoint := "/sell/negotiation/v1/offer"
 
-	return []Offer{}, nil
-}
-
-// GetListings retrieves active inventory listings
-func (c *Client) GetListings(limit int) ([]map[string]interface{}, error) {
-	if c.config.AccessToken == "" {
-		return nil, fmt.Errorf("no access token available")
+	respData, err := c.makeRequest("GET", endpoint, nil)
+	if err != nil {
+		// Return error with helpful message
+		return nil, fmt.Errorf("eBay API doesn't support listing all offers directly. Use webhook notifications to receive offer alerts in real-time")
 	}
 
-	// Note: Listing retrieval requires either:
-	// 1. Inventory API with proper SKU management (not standard eBay listings)
-	// 2. Trading API with XML parsing (slow, complex)
-	// 3. Browse API (public data only, no seller-specific listings)
-	//
-	// For now, return guidance to check listings on eBay directly
-	return []map[string]interface{}{
-		{"message": "Listing retrieval requires Trading API XML parsing or inventory management. Check your active listings at: https://www.ebay.com/sh/lst/active"},
-	}, nil
+	var response OffersResponse
+	if err := json.Unmarshal(respData, &response); err != nil {
+		return nil, fmt.Errorf("failed to parse offers response: %w", err)
+	}
+
+	// Filter for PENDING offers only
+	pendingOffers := make([]Offer, 0)
+	for _, offer := range response.Offers {
+		if offer.Status == "PENDING" {
+			pendingOffers = append(pendingOffers, offer)
+		}
+	}
+
+	return pendingOffers, nil
+}
+
+// GetSellerUsername retrieves the authenticated seller's eBay username via the Identity API.
+// Requires commerce.identity.readonly scope (granted after re-authorizing with /ebay-authorize).
+func (c *Client) GetSellerUsername() (string, error) {
+	respData, err := c.makeRequest("GET", "/commerce/identity/v1/user/", nil)
+	if err != nil {
+		return "", fmt.Errorf("identity API error: %w", err)
+	}
+	var result struct {
+		Username string `json:"username"`
+	}
+	if err := json.Unmarshal(respData, &result); err != nil {
+		return "", fmt.Errorf("failed to parse identity response: %w", err)
+	}
+	if result.Username == "" {
+		return "", fmt.Errorf("no username returned by Identity API")
+	}
+	return result.Username, nil
+}
+
+// GetListings retrieves active listings via the Trading API GetMyeBaySelling.
+// Uses the seller's OAuth access token — works for all traditionally-listed items.
+func (c *Client) GetListings(limit int) ([]Listing, error) {
+	if c.config.AccessToken == "" {
+		return nil, fmt.Errorf("no access token - run /ebay-authorize first")
+	}
+	if limit <= 0 || limit > 200 {
+		limit = 10
+	}
+
+	// Trading API — GetMyeBaySelling returns all active listings for the authenticated seller
+	tradingURL := "https://api.ebay.com/ws/api.dll"
+	if c.config.Environment != "PRODUCTION" {
+		tradingURL = "https://api.sandbox.ebay.com/ws/api.dll"
+	}
+
+	reqBody := fmt.Sprintf(`<?xml version="1.0" encoding="utf-8"?>
+<GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+  <ErrorLanguage>en_US</ErrorLanguage>
+  <WarningLevel>High</WarningLevel>
+  <ActiveList>
+    <Include>true</Include>
+    <Pagination>
+      <EntriesPerPage>%d</EntriesPerPage>
+      <PageNumber>1</PageNumber>
+    </Pagination>
+  </ActiveList>
+  <DetailLevel>ReturnAll</DetailLevel>
+</GetMyeBaySellingRequest>`, limit)
+
+	req, err := http.NewRequest("POST", tradingURL, strings.NewReader(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to build Trading API request: %w", err)
+	}
+	req.Header.Set("Content-Type", "text/xml")
+	req.Header.Set("X-EBAY-API-SITEID", "0")
+	req.Header.Set("X-EBAY-API-COMPATIBILITY-LEVEL", "967")
+	req.Header.Set("X-EBAY-API-CALL-NAME", "GetMyeBaySelling")
+	req.Header.Set("X-EBAY-API-IAF-TOKEN", c.config.AccessToken)
+
+	log.Printf("[API] POST %s (Trading API: GetMyeBaySelling)", tradingURL)
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("Trading API request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read Trading API response: %w", err)
+	}
+	log.Printf("[API] POST Trading API => HTTP %d (%d bytes)", resp.StatusCode, len(body))
+	log.Printf("[DEBUG] Trading API response: %s", string(body))
+
+	var result struct {
+		XMLName xml.Name `xml:"GetMyeBaySellingResponse"`
+		Ack     string   `xml:"Ack"`
+		Errors  []struct {
+			LongMessage string `xml:"LongMessage"`
+		} `xml:"Errors"`
+		ActiveList struct {
+			ItemArray struct {
+				Items []struct {
+					ItemID        string `xml:"ItemID"`
+					Title         string `xml:"Title"`
+					Quantity      int    `xml:"Quantity"`
+					SellingStatus struct {
+						CurrentPrice struct {
+							CurrencyID string  `xml:"currencyID,attr"`
+							Value      float64 `xml:",chardata"`
+						} `xml:"CurrentPrice"`
+						QuantityRemaining int `xml:"QuantityRemaining"`
+					} `xml:"SellingStatus"`
+					ShippingDetails struct {
+						ShippingServiceOptions []struct {
+							ShippingServiceCost struct {
+								Value float64 `xml:",chardata"`
+							} `xml:"ShippingServiceCost"`
+						} `xml:"ShippingServiceOptions"`
+						ShippingType string `xml:"ShippingType"`
+					} `xml:"ShippingDetails"`
+					ConditionDisplayName string `xml:"ConditionDisplayName"`
+					PictureDetails       struct {
+						GalleryURL string   `xml:"GalleryURL"`
+						PictureURL []string `xml:"PictureURL"`
+					} `xml:"PictureDetails"`
+					ListingDetails struct {
+						ViewItemURL string `xml:"ViewItemURL"`
+					} `xml:"ListingDetails"`
+				} `xml:"Item"`
+			} `xml:"ItemArray"`
+		} `xml:"ActiveList"`
+	}
+
+	if err := xml.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("failed to parse Trading API response: %w", err)
+	}
+	if result.Ack != "Success" && result.Ack != "Warning" {
+		msg := "unknown error"
+		if len(result.Errors) > 0 {
+			msg = result.Errors[0].LongMessage
+		}
+		return nil, fmt.Errorf("Trading API error: %s", msg)
+	}
+
+	items := result.ActiveList.ItemArray.Items
+	listings := make([]Listing, 0, len(items))
+	for _, item := range items {
+		price := item.SellingStatus.CurrentPrice.Value
+		currency := item.SellingStatus.CurrentPrice.CurrencyID
+		if currency == "" {
+			currency = "USD"
+		}
+		qty := item.SellingStatus.QuantityRemaining
+		if qty == 0 {
+			qty = item.Quantity
+		}
+
+		shipping := "See listing"
+		if item.ShippingDetails.ShippingType == "Free" {
+			shipping = "Free"
+		} else if len(item.ShippingDetails.ShippingServiceOptions) > 0 {
+			cost := item.ShippingDetails.ShippingServiceOptions[0].ShippingServiceCost.Value
+			if cost == 0 {
+				shipping = "Free"
+			} else {
+				shipping = fmt.Sprintf("$%.2f", cost)
+			}
+		}
+
+		// GetMyeBaySelling only returns GalleryURL (s-l140.jpg, 140px).
+		// eBay's CDN supports larger sizes via URL suffix substitution.
+		imageURL := item.PictureDetails.GalleryURL
+		if len(item.PictureDetails.PictureURL) > 0 {
+			imageURL = item.PictureDetails.PictureURL[0]
+		}
+		// Upgrade thumbnail to 500px version by replacing size suffix
+		imageURL = strings.Replace(imageURL, "s-l140.jpg", "s-l500.jpg", 1)
+		imageURL = strings.Replace(imageURL, "s-l96.jpg", "s-l500.jpg", 1)
+
+		listings = append(listings, Listing{
+			Title:      item.Title,
+			Price:      price,
+			Currency:   currency,
+			Shipping:   shipping,
+			Quantity:   qty,
+			Condition:  item.ConditionDisplayName,
+			ImageURL:   imageURL,
+			ListingURL: item.ListingDetails.ViewItemURL,
+		})
+	}
+
+	return listings, nil
 }
 
 // RespondToOffer accepts, declines, or counters a buyer offer
@@ -318,52 +545,46 @@ func (c *Client) RespondToOffer(offerID string, action string, counterPrice floa
 
 // GetSellerBalance retrieves seller account balance information
 func (c *Client) GetSellerBalance() (map[string]float64, error) {
-	// Try the transactions endpoint to calculate balance
-	respData, err := c.makeRequest("GET", "/sell/finances/v1/transaction?limit=50", nil)
+	// Use seller_funds_summary endpoint to get pending payout amount
+	respData, err := c.makeRequest("GET", "/sell/finances/v1/seller_funds_summary", nil)
 	if err != nil {
 		log.Printf("[DEBUG] Balance API error: %v", err)
-		// If transactions fail, could mean no Managed Payments or missing OAuth scope
 		if strings.Contains(err.Error(), "404") {
-			return nil, fmt.Errorf("finances API not available - try /ebay-authorize to re-authorize with Finances API scope, or check your eBay keyset has Finances API enabled in Developer Portal")
+			return nil, fmt.Errorf("finances API not available - ensure your eBay account is enrolled in Managed Payments")
 		}
 		if strings.Contains(err.Error(), "403") || strings.Contains(err.Error(), "401") {
-			return nil, fmt.Errorf("finances API access denied - please run /ebay-authorize to re-authorize with Finances API scope")
+			return nil, fmt.Errorf("finances API access denied - run /ebay-authorize to re-authorize with Finances API scope")
 		}
 		return nil, fmt.Errorf("failed to get balance: %w", err)
 	}
 
-	// Log response for debugging (truncate if too long)
-	debugResp := string(respData)
-	if len(debugResp) > 500 {
-		debugResp = debugResp[:500]
-	}
-	log.Printf("[DEBUG] Balance API Response (first 500 chars): %s", debugResp)
+	log.Printf("[DEBUG] Balance API Response: %s", string(respData))
 
 	var result struct {
-		Transactions []struct {
-			Amount struct {
-				Value    string `json:"value"`
-				Currency string `json:"currency"`
-			} `json:"amount"`
-			TransactionType string `json:"transactionType"`
-		} `json:"transactions"`
+		AvailableFunds struct {
+			Value    string `json:"value"`
+			Currency string `json:"currency"`
+		} `json:"availableFunds"`
+		TotalBalance struct {
+			Value    string `json:"value"`
+			Currency string `json:"currency"`
+		} `json:"totalBalance"`
 	}
 
 	if err := json.Unmarshal(respData, &result); err != nil {
-		return nil, fmt.Errorf("failed to parse transactions: %w", err)
+		return nil, fmt.Errorf("failed to parse balance response: %w", err)
 	}
 
-	// Calculate balance from transactions
-	var balance float64
-	for _, tx := range result.Transactions {
-		var amount float64
-		fmt.Sscanf(tx.Amount.Value, "%f", &amount)
-		balance += amount // eBay API returns negative values for fees
-	}
+	// Parse the available funds (pending payout amount)
+	var available float64
+	fmt.Sscanf(result.AvailableFunds.Value, "%f", &available)
+
+	var total float64
+	fmt.Sscanf(result.TotalBalance.Value, "%f", &total)
 
 	return map[string]float64{
-		"available": balance,
-		"total":     balance,
+		"available": available,
+		"total":     total,
 	}, nil
 }
 

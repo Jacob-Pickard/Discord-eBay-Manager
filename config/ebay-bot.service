@@ -6,6 +6,7 @@ After=network.target
 Type=simple
 User=jacob
 WorkingDirectory=/home/jacob/ebay-bot
+EnvironmentFile=/home/jacob/ebay-bot/.env
 ExecStart=/home/jacob/ebay-bot/ebaymanager-bot-linux
 Restart=always
 RestartSec=10

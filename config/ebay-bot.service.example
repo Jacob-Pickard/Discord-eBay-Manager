@@ -1,0 +1,24 @@
+# Systemd Service File for eBay Discord Bot
+# Copy this file to /etc/systemd/system/ebay-bot.service on your server
+# Then customize it with your actual username and paths
+
+[Unit]
+Description=eBay Discord Bot Manager
+After=network.target
+
+[Service]
+Type=simple
+User=youruser
+WorkingDirectory=/home/youruser/ebay-bot
+EnvironmentFile=/home/youruser/ebay-bot/.env
+ExecStart=/home/youruser/ebay-bot/ebaymanager-bot-linux
+Restart=always
+RestartSec=10
+StandardOutput=append:/home/youruser/ebay-bot/bot.log
+StandardError=append:/home/youruser/ebay-bot/bot-error.log
+
+# Environment settings
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+[Install]
+WantedBy=multi-user.target

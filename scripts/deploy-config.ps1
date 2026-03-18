@@ -1,12 +1,31 @@
 # Update .env Configuration on Server
 # Use this to update environment variables without redeploying the binary
+# Configuration is loaded from deploy-config.env file
 
 param(
-    [string]$ServerUser = "jacob",
-    [string]$ServerIP = "192.168.0.12",
-    [string]$ServerPath = "/home/jacob/ebay-bot",
+    [string]$ConfigFile = "$PSScriptRoot/../deploy-config.env",
     [string]$LocalEnvFile = ".env"
 )
+
+# Load configuration from file
+if (Test-Path $ConfigFile) {
+    Write-Host "Loading configuration from: $ConfigFile" -ForegroundColor Cyan
+    Get-Content $ConfigFile | ForEach-Object {
+        if ($_ -match '^\s*([^#][^=]+)=(.+)$') {
+            $key = $Matches[1].Trim()
+            $value = $Matches[2].Trim()
+            Set-Variable -Name $key -Value $value -Scope Script
+        }
+    }
+} else {
+    Write-Host "❌ Configuration file not found: $ConfigFile" -ForegroundColor Red
+    Write-Host "Please copy deploy-config.env.example to deploy-config.env and customize it" -ForegroundColor Yellow
+    exit 1
+}
+
+$ServerUser = $DEPLOY_SERVER_USER
+$ServerIP = $DEPLOY_SERVER_IP
+$ServerPath = $DEPLOY_SERVER_PATH
 
 if (-not (Test-Path $LocalEnvFile)) {
     Write-Host "❌ Error: $LocalEnvFile not found!" -ForegroundColor Red
