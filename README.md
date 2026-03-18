@@ -3,7 +3,6 @@
 > A production-ready Discord bot for managing your eBay business operations—all from Discord.
 
 [![Go Version](https://img.shields.io/badge/Go-1.21-00ADD8?logo=go)](https://go.dev/)
-[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20Windows-lightgrey)]()
 
 ## 🎯 Overview
